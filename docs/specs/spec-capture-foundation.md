@@ -402,3 +402,32 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   Projekt-MSRV anhebt, sollte die Toolchain-Entkopplung nicht stillschweigend
   entfernen — sie ist einzig deshalb da, weil `cargo-deny` keine
   Rückwärtskompatibilität zur gepinnten Rust-Version zusichert.
+- 2026-07-30: Issue #4 (`core`-Domänentypen) legt vier Detailentscheidungen fest,
+  die die Spec offen ließ:
+  - `CaptureSubject` trägt genau `process_name: String` und `root_pid: u32` — exakt
+    das, was `list-sources` laut Outcome zeigt und was `audio-win` zur Auflösung
+    braucht. Keine weiteren Felder, bis eine spätere Phase sie verlangt.
+  - `SessionId` ist ein opaker, monotoner `u64`-Zähler (`AtomicU64`), keine UUID,
+    ohne öffentlichen Zugriff auf den Rohwert (nur `Debug`, für Logging). Sessions
+    werden nie persistiert oder über Prozessgrenzen hinweg wiederaufgenommen, also
+    reicht Eindeutigkeit **innerhalb eines Prozesslaufs**; eine zusätzliche
+    Abhängigkeit (`uuid`, `rand`) wäre für diese Phase unbegründet und steht auch
+    nicht in der Allowlist der Constraints. Bewusst **kein** `Default`: `new()` hat
+    einen Seiteneffekt (der Zähler rückt vor), zwei Aufrufe liefern nie denselben
+    Wert — genau das Gegenteil dessen, was `Default` üblicherweise zusichert.
+  - Der Attestation-Text wird als zusammenhängender String mit `\n\n` zwischen den
+    Absätzen abgelegt, der letzte Satz „Ich bestätige das Vorstehende." /
+    „I confirm the above." eingeschlossen. Das rohe Markdown-Checkbox-Symbol
+    `[ ]` ist reine UI-Notation der Spec-Darstellung, nicht Teil des Wortlauts, und
+    fehlt deshalb in der Konstante — das eigentliche Häkchen zeichnet der Dialog.
+    Die deutsche Quelle unterscheidet bewusst „Erfassung" (unsere eigene Handlung)
+    von „Aufzeichnen"/„Aufnahme" (die verbotene bzw. abwesende Tonaufnahme); die
+    englische Fassung hält das mit „capture" gegen „recording" durch, sonst würde
+    Absatz 1 der eigenen Zusicherung in Absatz 4 widersprechen. Der Klammerzusatz
+    „(§ 201 StGB)" bleibt ohne Erläuterungszusatz in beiden Sprachen — 1:1, nicht
+    erklärt.
+  - `SessionState` trägt die beiden Kanten (`request_stop`, `end`) selbst als reine,
+    zustandslose Methoden, die bei einer ungültigen Kante einen
+    `SessionStateError` (via `thiserror`) zurückgeben statt zu paniken. Das ist die
+    Zustandsmaschine selbst — verschieden vom `Session`-Orchestrator in `session`,
+    der Threads und `AudioSource`s besitzt und weiterhin dort bleibt.
