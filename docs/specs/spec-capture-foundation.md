@@ -1102,3 +1102,81 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     gegen `subject`; ein fehlender Prozess an der gemerkten `root_pid` zählt
     als Mismatch, nicht als Sonderfall — es gibt nichts mehr zu
     identifizieren. `open_local`s Stub bleibt unverändert (Issue #13).
+- 2026-07-30: Issue #10 (gerätefreier Sitzungs-FS-Audit) legt die Kindprozess-Route
+  und die Vakuität-Wächter fest:
+  - **Route:** ein zusätzliches `[[bin]]`-Target, `crates/session/src/bin/
+    fs_audit_child.rs` — von Cargo automatisch als Binärziel `fs_audit_child`
+    erkannt, ohne eine Änderung an `Cargo.toml`. Der Parent-Test
+    (`crates/session/tests/fs_audit.rs`) startet es über
+    `env!("CARGO_BIN_EXE_fs_audit_child")`, den Pfad, den Cargo für
+    Integrationstests **desselben** Pakets automatisch setzt, sobald es das
+    Binärziel gebaut hat — kein `cargo run` als Unterprozess, kein
+    String-Pfad-Raten. Gegenüber den beiden Alternativen: ein `examples/`-Binary
+    hätte keinen äquivalenten, offiziell zugesicherten `CARGO_..._EXE_`-Pfad
+    (Cargo dokumentiert das Env-Var nur für `[[bin]]`-Ziele); den Test-Binary
+    selbst mit einer Marker-Variable wiederzuverwenden hätte `trybuild`s eigene
+    `compile_fail`-Fixtures und die übrigen `session`-Tests in denselben
+    Prozessraum wie die FS-Beobachtung gezogen, ohne einen Vorteil zu bieten.
+    Der Kindprozess führt eine **ganze** Sitzung: `TestToneSources` mit
+    `with_total_frames`, `Session::start`, 200 ms Erfassungsfenster, dann
+    `Session::stop()` — nicht nur Start und sofortiges Beenden.
+  - **Kein neuer Parameter auf `Session::start`.** Das „frische Arbeitsverzeichnis,
+    das die Sitzung bekommt" wird durch `Command::current_dir` auf den
+    Kindprozess realisiert, nicht durch eine Signaturänderung an `Session`
+    oder `CapturePlan` — beide sind über mehrere Review-Runden (#9) stabilisiert
+    und dieses Issue ändert keine ihrer Zeilen. „Prozess-eigen" heißt hier:
+    eigen für den Kindprozess, dessen einzige Aufgabe die eine Sitzung ist.
+  - **Wächter gegen einen vakuosen Durchlauf**, in der Reihenfolge der
+    Vorgabe:
+    1. *Der Kindprozess muss echte Arbeit geleistet haben.* Jede der beiden
+       Quellen wird in einen zählenden `AudioSource`-Wrapper
+       (`CountingSource`) gehüllt, der jedes tatsächlich gepullte
+       `AudioSourceEvent::Frame` zählt; der Kindprozess druckt
+       `remote_frames=<n>` / `local_frames=<n>` auf stdout, der Parent-Test
+       parst beide Zeilen und verlangt `n > 0` für **beide** Ströme — nicht
+       nur den Exit-Code. Eine Sitzung, die beim Start scheitert, hätte sonst
+       „0 neue Dateien" **und** Exit-Code 0 vom vorherigen `fail()`-Pfad
+       vorgetäuscht; mit dem Frame-Zähler scheitert sie stattdessen laut.
+    2. *Rekursiv, nicht nur oberste Ebene.* `snapshot()` steigt in jedes
+       Unterverzeichnis ab. Durch Mutationstest belegt: mit der Rekursion
+       stillgelegt schlägt `detects_a_file_written_into_either_watched_directory`
+       reproduzierbar fehl (`expected exactly the nested evidence file, got
+       []`), mit ihr wieder grün.
+    3. *Während der Sitzung beobachten, nicht nur davor/danach.* Der
+       Parent-Test pollt beide Verzeichnisse alle 15 ms, solange der
+       Kindprozess läuft (`Child::try_wait`), zusätzlich zu je einer
+       Aufnahme vor dem Start und nach dem Exit — die Verteidigung gegen
+       eine Datei, die während der Sitzung geschrieben und vor deren Ende
+       wieder gelöscht wird. Ein reines Vorher/Nachher-Paar hätte diesen Fall
+       unsichtbar gelassen.
+    4. *Der Detektor erkennt tatsächlich etwas.* Der zweite Test
+       (`detects_a_file_written_into_either_watched_directory`) schreibt
+       direkt (nicht über den Kindprozess) je eine Datei in eine verschachtelte
+       Unterstruktur des Arbeitsverzeichnisses und in das Temp-Verzeichnis und
+       verlangt, dass genau diese eine Datei als neu erscheint — dieselbe
+       `snapshot`/Differenz-Funktion, die der Haupttest auf „leer" prüft, wird
+       hier auf „nicht leer" geprüft.
+    5. *Kein stillschweigend verschlucktes Scheitern.* Jeder Fehlerpfad im
+       Kindprozess (`fail()`) druckt auf stderr und beendet mit Exit-Code 2,
+       nie mit Panik im Erfassungs-Thread; der Parent-Test hängt das
+       Kind-stderr an jede fehlgeschlagene Status-Assertion an.
+  - **`TMP`/`TEMP`/`TMPDIR`** werden ausschließlich über `Command::env` auf
+    den Kindprozess gesetzt, nie im laufenden Testprozess selbst
+    (`std::env::set_var` ist in Edition 2024 `unsafe`, `forbid(unsafe_code)`
+    gilt auch für Testcode). Das beobachtete Verzeichnis ist eine frisch
+    erzeugte, eindeutig benannte Unterstruktur unter dem geteilten
+    System-Temp-Wurzelverzeichnis (`std::env::temp_dir()` **im Parent-Prozess**
+    aufgerufen, dessen eigene `TMP`/`TEMP` unverändert bleiben) — nie das
+    geteilte Wurzelverzeichnis selbst, das Cargo und fremde Prozesse
+    beschreiben und das den Audit sonst sporadisch rot gemacht hätte
+    (spec's Begründung). `TMPDIR` wird zusätzlich gesetzt, ohne dass es die
+    Windows-CI dieser Phase braucht — eine kleine Portabilitätsreserve, falls
+    dieser Test je auf einer anderen Zielplattform läuft.
+  - **Aufräumen:** ausschließlich `fs::remove_dir_all` auf genau die beiden
+    Pfade, die dieselbe Testfunktion zuvor selbst über `fresh_dir()` angelegt
+    hat — nie auf das geteilte Temp-Wurzelverzeichnis. Läuft auch auf dem
+    Timeout- und dem Poll-Fehlerpfad, nicht nur beim Normalpfad.
+  - Zurückgestellt, keine Entscheidung dieses Issues: ob `session` in
+    `xtask::audit::GUARDED_CRATES` aufgenommen wird, bleibt die offene, an die
+    Planung weitergereichte Frage aus Issue #9s Decision-Log-Eintrag — dieses
+    Issue fügt `session` dort nicht hinzu.
