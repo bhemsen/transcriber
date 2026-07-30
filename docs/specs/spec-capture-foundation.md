@@ -927,3 +927,45 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     als offene Frage für die Planung, nicht stillschweigend entschieden:
     `session` besitzt ab jetzt jeden Ringpuffer mit live-PCM und verdient
     denselben Audit-Schutz wie die vier gelisteten Crates.
+- 2026-07-30: Eine zweite Review-Runde (frischer Agent, Opus) bestätigte die
+  beiden Fixes der ersten Runde als echt und wirksam (per Falsifikation:
+  jeweils der alte Code zurückgesetzt, der zugehörige Regressionstest
+  schlug reproduzierbar fehl), deckte aber zwei weitere Punkte auf, beide
+  vor dem Merge behoben:
+  - **Der Fund:** `session.rs` war durch die neuen Regressionstests der
+    ersten Runde auf 407 Zeilen gewachsen — über die 400-Zeilen-Grenze der
+    Constitution, von keinem Clippy-Lint erfasst (`too_many_lines` misst nur
+    Funktionen). Behoben nach dem im Repo etablierten Muster
+    (`crates/audio/src/test_tone.rs` + `test_tone/tests.rs`): das
+    Testmodul wandert nach `crates/session/src/session/tests.rs`,
+    `session.rs` behält nur `#[cfg(test)] mod tests;`. Jetzt 286 bzw.
+    163 Zeilen.
+  - **Der Fund:** Der `Drop`-Fix der ersten Runde behob den unbegrenzten
+    Fall (Bug 2), führte aber eine **begrenzte** Version derselben
+    Fehlerform am Abbruchpfad wieder ein: `Session` selbst hatte keinen
+    eigenen `Drop`, also lief Rusts feldweise Reihenfolge (`remote` vor
+    `local`) — `remote`s `StreamCapture::drop` signalisiert **und** jointe
+    blockierend (bis zu `PULL_TIMEOUT`), bevor `local`s Stop-Flag je gesetzt
+    wurde. Behoben durch drei geteilte private Methoden
+    (`signal_all_streams_to_stop`, `join_all_streams`, `zero_all_streams`),
+    die `request_stop`/`end` jetzt nutzen, plus ein neues `impl Drop for
+    Session`, das dieselbe Reihenfolge (signalisieren, dann erst joinen,
+    dann nullen) am Abbruchpfad nachzieht — idempotent, weil die
+    anschließend automatisch laufenden feldweisen `Drop`-Aufrufe dann nichts
+    mehr vorfinden.
+  - Beide Korrekturen zusammen deckten einen dritten, echten Fehler auf, den
+    keine der beiden Review-Runden fand, sondern ein flackernder Testlauf
+    (1 von 5 lokalen Wiederholungen): `capture_loop` aktualisierte
+    `position` **vor** dem Schreiben in `ring`, sodass ein Leser, der einen
+    neuen, von Null verschiedenen `elapsed()`-Wert sah, den zugehörigen
+    Puffereintrag noch nicht zwingend vorfand — kein Sicherheitsproblem für
+    die produktive Nutzung von `elapsed()` allein, aber ein echtes
+    Race in genau der Prüfung, die der Drop-Regressionstest braucht
+    (Ringpuffer real beschrieben, *bevor* gedroppt wird). Behoben durch
+    Vertauschen der Reihenfolge (`ring` zuerst, `position` danach) — die
+    beiden `Mutex`e machen daraus eine echte Happens-before-Garantie
+    (Freigabe von `ring` ist sequenced-before dem Erwerb von `position`
+    im selben Thread; Freigabe von `position` synchronisiert sich mit
+    jedem späteren Erwerb durch einen Leser), nicht nur eine meist
+    zutreffende Reihenfolge. Belegt durch 30 wiederholte Läufe des zuvor
+    flackernden Tests ohne einen weiteren Fehlschlag.

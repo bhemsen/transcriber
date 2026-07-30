@@ -189,9 +189,14 @@ fn capture_loop(
         match source.pull(PULL_TIMEOUT) {
             Ok(AudioSourceEvent::Frame(frame)) => {
                 let normalized = clock.normalize(frame.timestamp());
-                if let Ok(mut position) = position.lock() {
-                    *position = normalized;
-                }
+                // Push into `ring` *before* publishing `position`: a
+                // reader that observes a new `position` must never be able
+                // to look at `ring` and find the corresponding data still
+                // missing. The two locks make this a real happens-before
+                // guarantee, not just an ordering that is usually true —
+                // `ring`'s unlock here is sequenced-before `position`'s
+                // lock below, which synchronizes-with any later reader
+                // that locks `position` and then locks `ring` in turn.
                 match ring.lock() {
                     Ok(mut ring) => ring.push(frame),
                     Err(_) => {
@@ -201,6 +206,9 @@ fn capture_loop(
                         });
                         break;
                     }
+                }
+                if let Ok(mut position) = position.lock() {
+                    *position = normalized;
                 }
             }
             Ok(AudioSourceEvent::Idle) => {}
