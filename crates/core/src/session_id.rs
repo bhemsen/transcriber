@@ -15,22 +15,15 @@ pub struct SessionId(u64);
 impl SessionId {
     /// Allocates a new id, distinct from every other id created by this
     /// process so far.
+    ///
+    /// Deliberately has no `Default` impl: calling this has the side effect
+    /// of advancing the counter, so two calls are never equal — the opposite
+    /// of what `Default` conventionally promises.
     #[must_use]
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-
-    /// The underlying counter value.
-    #[must_use]
-    pub fn value(&self) -> u64 {
-        self.0
-    }
-}
-
-impl Default for SessionId {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

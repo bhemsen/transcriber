@@ -8,9 +8,9 @@
 //! Phase 1 brings the domain types a consented session is built from:
 //! [`StreamIdentity`], [`CaptureSubject`], [`SessionId`], [`SessionState`]
 //! and [`ConsentAttestation`] with the versioned attestation text. The
-//! `Session` orchestrator itself lives in `transcriber-session`, not here —
-//! this crate stays free of I/O and platform dependencies so that boundary
-//! is a property of the dependency graph, not a review judgment call.
+//! `Session` orchestrator itself lives in `transcriber-session`, not
+//! here — so that crates depending on `core` never pull in its threads,
+//! buffers or platform code transitively.
 
 mod consent;
 mod error;

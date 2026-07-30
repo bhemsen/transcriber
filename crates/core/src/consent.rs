@@ -64,7 +64,7 @@ pub const ATTESTATION_V1_DE: &str = "Ich bestätige, dass ich alle Gesprächstei
 
 /// English wording of the version-1 attestation text, translated 1:1 from
 /// [`ATTESTATION_V1_DE`] and carrying the same version number.
-pub const ATTESTATION_V1_EN: &str = "I confirm that I have informed all conversation participants about the transcript before the start of the recording and that their consent has been given.\n\nI am aware that recording or transcribing the non-publicly spoken word without the consent of the speakers is a criminal offense (§ 201 StGB, German Criminal Code).\n\nThe resulting protocol contains personal data. I am responsible for its retention and deletion.\n\nAt no point does an audio or video recording occur, and no voice profile survives this session.\n\nThis confirmation is recorded with a timestamp in the protocol header.\n\nI confirm the above.";
+pub const ATTESTATION_V1_EN: &str = "I confirm that I have informed all conversation participants about the transcript before the start of the capture and that their consent has been given.\n\nI am aware that recording or transcribing the non-publicly spoken word without the consent of the speakers is a criminal offense (§ 201 StGB).\n\nThe resulting protocol contains personal data. I am responsible for its retention and deletion.\n\nAt no point does an audio or video recording occur, and no voice profile survives this session.\n\nThis confirmation is recorded with a timestamp in the protocol header.\n\nI confirm the above.";
 
 #[cfg(test)]
 mod tests {
@@ -89,5 +89,27 @@ mod tests {
     fn de_and_en_texts_are_five_paragraphs_plus_the_checkbox_label() {
         assert_eq!(ATTESTATION_V1_DE.split("\n\n").count(), 6);
         assert_eq!(ATTESTATION_V1_EN.split("\n\n").count(), 6);
+    }
+
+    /// Guards the distinction the whole project rests on: what we do is a
+    /// *capture* (`Erfassung`), never a *recording* (`Aufnahme`/`Aufzeichnen`)
+    /// — see `docs/vision.md`'s non-goals and `CLAUDE.md` rule 1. Paragraph 1
+    /// names our own action and must say "capture", not "recording"; only
+    /// paragraph 2 (the criminal-law reference, which is about recording in
+    /// general) and paragraph 4 (asserting that no recording ever happens)
+    /// may say "recording".
+    #[test]
+    fn en_text_names_its_own_action_a_capture_not_a_recording() {
+        let first_paragraph = ATTESTATION_V1_EN.split("\n\n").next().unwrap_or_default();
+        assert!(first_paragraph.contains("start of the capture"));
+        assert!(!first_paragraph.contains("recording"));
+    }
+
+    #[test]
+    fn de_and_en_texts_confirm_no_recording_survives_the_session() {
+        assert!(ATTESTATION_V1_DE.contains("Ton- oder Bildaufnahme"));
+        assert!(ATTESTATION_V1_DE.contains("kein Stimmprofil überlebt diese Sitzung"));
+        assert!(ATTESTATION_V1_EN.contains("audio or video recording"));
+        assert!(ATTESTATION_V1_EN.contains("no voice profile survives this session"));
     }
 }
