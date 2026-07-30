@@ -1,17 +1,20 @@
 //! The one edge module in this crate: everything that actually calls into
 //! `wasapi` or `sysinfo` lives here (this file) or in its
-//! [`loopback_client`] submodule — split out purely to keep both files
-//! under the constitution's 400-line-per-module guideline, not a second
-//! edge — over the pure functions in [`crate::process_tree`],
-//! [`crate::sessions`] and [`crate::loopback`].
+//! [`loopback_client`] and [`microphone_client`] submodules — split out
+//! purely to keep every file under the constitution's 400-line-per-module
+//! guideline, not a second or third edge — over the pure functions in
+//! [`crate::process_tree`], [`crate::sessions`], [`crate::loopback`] and
+//! [`crate::microphone`].
 //!
-//! Only [`loopback_client::LoopbackSource`]'s methods are exercised by a
+//! Only [`loopback_client::LoopbackSource`]'s and
+//! [`microphone_client::MicrophoneSource`]'s methods are exercised by a
 //! real capture path — the spec's risk table notes `windows-latest` CI
 //! runners have no audio device, so this edge gets compile checks only;
-//! [`crate::process_tree`], [`crate::sessions`] and [`crate::loopback`]
-//! carry the real, device-free logic tests.
+//! [`crate::process_tree`], [`crate::sessions`], [`crate::loopback`] and
+//! [`crate::microphone`] carry the real, device-free logic tests.
 
 mod loopback_client;
+mod microphone_client;
 
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
@@ -23,15 +26,15 @@ use wasapi::{Device, DeviceEnumerator, Direction};
 use crate::process_tree::{ProcessSnapshot, identity_still_matches};
 use crate::sessions::{RenderSession, SessionActivity, active_capture_subjects};
 use loopback_client::LoopbackSource;
+use microphone_client::MicrophoneSource;
 
 /// The Windows [`SourceFactory`]: enumerates applications with an active
-/// render stream via WASAPI and `sysinfo`, and opens the `Remote` loopback
-/// stream for one of them.
+/// render stream via WASAPI and `sysinfo`, opens the `Remote` loopback
+/// stream for one of them, and opens the `Local` microphone stream with OS
+/// echo cancellation where the platform supports it.
 ///
-/// [`SourceFactory::list_subjects`] and [`SourceFactory::open_remote`] are
-/// implemented. `open_local` (issue #13, microphone capture with echo
-/// cancellation) still returns an explicit [`SourceFactoryError::Open`]
-/// rather than a value that looks like a working stream.
+/// [`SourceFactory::list_subjects`], [`SourceFactory::open_remote`] and
+/// [`SourceFactory::open_local`] are all implemented.
 #[derive(Debug, Default)]
 pub struct WindowsSources;
 
@@ -69,10 +72,14 @@ impl SourceFactory for WindowsSources {
     }
 
     fn open_local(&self) -> Result<Option<Box<dyn AudioSource>>, SourceFactoryError> {
-        Err(SourceFactoryError::Open {
-            identity: StreamIdentity::Local,
-            reason: "Windows microphone capture is not implemented yet (issue #13)".to_string(),
-        })
+        match MicrophoneSource::open() {
+            Ok(Some(source)) => Ok(Some(Box::new(source))),
+            Ok(None) => Ok(None),
+            Err(error) => Err(SourceFactoryError::Open {
+                identity: StreamIdentity::Local,
+                reason: error.to_string(),
+            }),
+        }
     }
 }
 

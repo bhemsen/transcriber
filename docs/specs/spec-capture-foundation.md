@@ -1102,3 +1102,50 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     gegen `subject`; ein fehlender Prozess an der gemerkten `root_pid` zählt
     als Mismatch, nicht als Sonderfall — es gibt nichts mehr zu
     identifizieren. `open_local`s Stub bleibt unverändert (Issue #13).
+- 2026-07-30: Issue #13 (`audio-win`-Mikrofon-Erfassung mit
+  betriebssystemseitiger Echokompensation, `open_local`) legt drei
+  Detailentscheidungen fest, die die Spec offen ließ:
+  - **Wiederverwendung statt Divergenz:** `MicrophoneSource`
+    (`sources/microphone_client.rs`) übernimmt Issue #12s
+    Worker-Thread-Muster unverändert (derselbe Grund: `AudioClient`,
+    `AudioCaptureClient` und `Handle` sind nicht `Send`,
+    `#![forbid(unsafe_code)]` bleibt gezogen) und importiert
+    `crate::loopback`s reine Paket-Logik (`bytes_to_f32_samples`,
+    `frame_for_packet`, `timeout_millis`, `PacketFlags`, `GapCounters`)
+    direkt, statt sie zu duplizieren — Byte-Dekodierung, Lücken-Zählung und
+    Timeout-Umrechnung sind für einen gewöhnlichen Erfassungs-Client
+    identisch zum Loopback-Client. Neu und mikrofon-eigen sind nur die
+    Geräte-Auflösung und die AEC-Kette, in einem eigenen reinen Modul
+    `crate::microphone` (`aec_degradation`, `microphone_absent`) nach
+    demselben Muster wie `crate::loopback`: frei von `wasapi`/`windows`,
+    damit beide auf einem geräte­losen CI-Runner testbar bleiben. Das
+    Modul `crate::loopback` bleibt unbenannt — die Umbenennung auf einen
+    generischeren Namen hätte Issue #12s bereits gemergten Code berührt,
+    ohne dass dieses Issue das bräuchte.
+  - **Die Abwesenheits-Erkennung ist ein Integer-Vergleich, kein
+    `wasapi`-Typ-Vergleich:** `microphone_absent(hresult: i32)` vergleicht
+    gegen `0x8007_0490` (`HRESULT_FROM_WIN32(ERROR_NOT_FOUND)`), das
+    dokumentierte `E_NOTFOUND`, das `IMMDeviceEnumerator::
+    GetDefaultAudioEndpoint` liefert, wenn kein Gerät der angefragten
+    Rolle/Richtung existiert. Rechnerisch aus der Win32-HRESULT-Formel
+    hergeleitet und gegen die Konstante getestet (nicht empirisch an einem
+    Rechner ohne Mikrofon beobachtet — dafür gibt es in dieser Umgebung
+    kein Gerät, das sich sitzungsweise abstecken ließe). Ein zweiter Test
+    belegt, dass ein anderer HRESULT-Wert (`E_ACCESSDENIED`, der Fall der
+    Human-Prerequisite „Mikrofon-Datenschutzeinstellung aus") **nicht**
+    als Abwesenheit missverstanden wird, sondern als echter Fehler
+    durchschlägt — genau die Unterscheidung, die die Spec fordert.
+  - **Ein Fehler in der AEC-Kette nach einer `true`-Probe wird nicht als
+    zweite Degradierung gefaltet, sondern als echter Fehler behandelt:**
+    Die Spec entscheidet „`is_aec_supported() == false`" → warnen und
+    weiterlaufen. Schlägt danach `get_aec_control()`, die
+    Render-Geräte-Auflösung oder `set_echo_cancellation_render_endpoint`
+    fehl — z. B. ein Rechner ganz ohne Wiedergabegerät —, ist das eine
+    Inkonsistenz, die die Spec nicht adressiert, kein zweiter Fall von
+    „AEC fehlt". Bewusst als `Err` durchgereicht statt stillschweigend zu
+    `EchoCancellationUnavailable` heruntergestuft, damit ein echtes
+    Plattformproblem sichtbar bleibt statt hinter einer normal aussehenden
+    Degradierung zu verschwinden. Als Randfall dokumentiert, nicht als
+    neues Issue — betrifft eine Rechnerkonfiguration (Mikrofon vorhanden,
+    kein Wiedergabegerät), die die Human-Prerequisites dieser Phase nicht
+    vorsehen.
