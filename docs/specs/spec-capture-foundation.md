@@ -491,3 +491,90 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   - Der synthetische Sinus für den Resampling-Test lebt ausschließlich im
     Testmodul von `crates/audio/src/resample.rs`, nicht als öffentliche API —
     die Testton-Quelle samt `SourceFactory` ist Issue #7s Fläche, nicht diese.
+- 2026-07-30: Issue #8 (Quell-, Manifest- und Graph-Audit) legt drei
+  Detailentscheidungen fest, die die Spec offen ließ:
+  - Der Symbol-Scan normalisiert Whitespace vor dem Vergleich (alle
+    Leerraumzeichen entfernt), damit sowohl `std :: fs :: write` als auch
+    `use std::fs::write as w;` erkannt werden — Letzteres, weil der
+    `use`-Pfad selbst noch die volle qualifizierte Zeichenkette trägt, auch
+    wenn der spätere Aufruf nur den Alias `w(...)` nennt. Für
+    `OpenOptions::write` reicht das nicht: idiomatischer Code schreibt diesen
+    Pfad praktisch nie als eine zusammenhängende Kette, sondern
+    `OpenOptions::new()` und danach `.write(true)` als eigener
+    Builder-Schritt. Dafür gibt es eine zusätzliche Heuristik: Datei enthält
+    `OpenOptions` **und** `.write(` → Fund. Was der Scan bewusst nicht kann:
+    eine Cross-Crate-Umleitung erkennen, die den Pfad nie im Quelltext der
+    bewachten Crate selbst wiederholt (z. B. ein `impl Write` in einer
+    unbewachten Hilfs-Crate) — dafür ist der Graph-Check die zweite,
+    unabhängige Sicherung, aber nur für die drei Crate-Namen (`serde`,
+    `reqwest`, `ureq`), nicht für die beiden `fs`-Symbole, die keine Crate
+    sind. Der Audit scannt ausschließlich die vier fest benannten
+    Crate-Verzeichnisse aus `audit::GUARDED_CRATES`, niemals `xtask` selbst —
+    ein Selbsttest (`guarded_crates_never_include_the_audit_tool_itself`)
+    hält das dauerhaft fest, damit der Scan nie seine eigenen
+    String-Literale oder Fixtures als Fund meldet.
+  - Manifest- und Graph-Prüfung laufen als zwei getrennte Schichten über
+    dieselbe reine Funktion (`blocked_dependencies_in`): die Manifest-Schicht
+    liest `[dependencies]` aus der `Cargo.toml` der Crate direkt (Text-Parser
+    für die flache `name = "version"`-Form, die jede Crate hier aktuell
+    nutzt — eine `[dependencies.foo]`-Untertabelle würde nicht erkannt,
+    bewusst offengelegte Lücke statt stiller Annahme); die Graph-Schicht ruft
+    `cargo tree --offline -e normal,build` für das Crate auf und prüft den
+    **vollständigen transitiven** Abhängigkeitsbaum, damit auch eine indirekt
+    ankommende `serde`-Abhängigkeit auffällt. Beide Schichten brauchen keine
+    neue Abhängigkeit (kein `cargo_metadata`, kein `serde_json`) — `cargo
+    tree` ist ein in Cargo eingebauter Befehl, der Klartext statt JSON
+    liefert, also entfällt ein Eintrag in der `cargo-deny`-Allowlist.
+  - Der Test liegt bewusst nicht als `xtask/tests/audit.rs`, sondern als
+    `xtask/tests/no_write_paths.rs` (der Einstiegspunkt, von Cargo als
+    einziges Test-Target automatisch erkannt) plus
+    `xtask/tests/audit/mod.rs` (die reinen Detektoren mit ihren
+    Fixture-Tests, per `mod audit;` eingebunden). Ein `audit.rs` direkt unter
+    `tests/` hätte Cargo als **zweites, eigenständiges** Test-Target
+    entdeckt — die Fixture-Tests wären doppelt gelaufen und `audit`s
+    `pub(crate)`-Sichtbarkeit hätte über die Crate-Grenze hinweg nicht mehr
+    gegolten. Die `<name>/mod.rs`-Form ist das etablierte Muster für
+    geteilte Hilfsmodule in Integrationstests, genau um das zu vermeiden.
+- 2026-07-30: Review-Runde durch einen frischen Agenten (Opus) deckte einen
+  echten Fund auf und führte zu vier Nachschärfungen, alle vor dem Merge
+  umgesetzt:
+  - **Der Fund:** `fs::File::create` als wörtliche Zeichenkette erkennt die
+    idiomatische Form nie, die echter Code tatsächlich schreibt —
+    `use std::fs::File;` gefolgt vom nicht qualifizierten `File::create(...)`
+    — weil der volle Pfad dabei nirgends zusammenhängend im Quelltext steht.
+    Genau dieselbe Beobachtung, die zur Builder-Heuristik für
+    `OpenOptions::write` führte, war auf `File::create` nicht angewandt
+    worden. Behoben durch Ersetzen des Blocklist-Eintrags durch `File::create`
+    (Teilstring von `fs::File::create`, erkennt also weiterhin auch die
+    vollqualifizierte Form, zusätzlich auch `File::create_new`) und eine
+    zweite Builder-Heuristik für den Alias `File::options().write(...)`
+    (stabil seit Rust 1.75 — dasselbe Muster wie `OpenOptions::new()`, nur
+    unter anderem Namen).
+  - Der Manifest- und der Graph-Parser bekamen je eine
+    Nicht-Vakuität-Prüfung, dem bereits vorhandenen
+    `at_least_one_guarded_crate_exists…`-Test nachgebildet: der
+    Graph-Parser schlägt fehl, wenn das aufgerufene Paket nicht einmal sich
+    selbst in der `cargo tree`-Ausgabe findet (das wäre sonst von einem
+    kaputten Parser, der leer zurückgibt, nicht unterscheidbar); der
+    Manifest-Parser schlägt fehl, wenn er nie einen `[dependencies]`-Header
+    gesehen hat, statt eine leere, fälschlich "saubere" Liste zu melden.
+  - Die Crate-Namen-Prüfung wechselt von exaktem Abgleich auf Präfix-Abgleich
+    (`name.starts_with(prefix)`), weil `serde` sich seit 1.0.220 in
+    `serde_core`/`serde_derive` aufspaltet — eine Familie, die unter dem
+    exakten Namen `serde` durchrutschen könnte, ohne dass die Kern-Crate
+    selbst je auftaucht.
+  - `cargo tree` bekommt zusätzlich `--locked` (ein veraltetes Lockfile soll
+    laut fehlschlagen, nicht still umgangen werden) und läuft über
+    `env!("CARGO")` statt der wörtlichen Zeichenkette `"cargo"`, damit exakt
+    die bauende Toolchain aufgerufen wird, nicht was ein `PATH`-Lookup sonst
+    fände. `audit_crate` liest zusätzlich `build.rs`, falls vorhanden — ein
+    Schreibpfad, den der reine `src/`-Scan sonst nie sehen würde.
+  - Bewusst zurückgestellt, als Folge-Empfehlung ohne diesen Merge zu
+    blockieren: eine vollständige Quervalidierung aller `crates/`-
+    Unterverzeichnisse gegen eine explizite Allow-/Guard-Liste (heute deckt
+    `at_least_one_guarded_crate_exists…` den akuten Fall ab, dass **keine**
+    bewachte Crate mehr gefunden wird; ein Tippfehler in genau **einem**
+    Eintrag bleibt möglich, solange mindestens eine andere Crate noch
+    existiert) und die Erkennung von `[target.'cfg(...)'.dependencies]` in
+    der Manifest-Schicht (relevant erst mit `audio-win`, dokumentiert als
+    offene Lücke im Doc-Kommentar von `parse_direct_dependencies`).

@@ -10,7 +10,7 @@
 | Phase | Name | Spec | Milestone |
 |---|---|---|---|
 | 1 | Capture-Fundament Windows | [spec](specs/spec-capture-foundation.md) | [#1](https://github.com/bhemsen/transcriber/milestone/1) |
-| 2 | Lokale Transkription | — | — |
+| 2 | Lokale Transkription | [spec](specs/spec-local-transcription.md) | [#2](https://github.com/bhemsen/transcriber/milestone/2) |
 | 3 | Sprechertrennung | — | — |
 | 4 | Protokoll und Aufbewahrung | — | — |
 | 5 | Oberfläche | — | — |
