@@ -10,12 +10,12 @@ Cargo-Workspace, Crates unter `crates/`, Namensschema `transcriber-<concern>`.
 
 | Component | Responsibility |
 | --------- | -------------- |
-| `core` | Domänentypen: `Session`, `ConsentAttestation`, `TranscriptSegment`, `SpeakerLabel`, Zeitachse, Fehlertypen. Kein I/O, keine externen Abhängigkeiten |
-| `audio` | `AudioSource`-Trait, PCM-Frame-Typen, fest dimensionierter Ringpuffer, Resampling auf 16 kHz mono, Strom-Identität (`Local` / `Remote`) |
-| `audio-win` | WASAPI Process Loopback und Mikrofon-Capture, Prozessbaum-Enumeration. Das einzige Crate mit `unsafe` |
+| `core` | Domänentypen: `SessionState`, `SessionId`, `ConsentAttestation`, `TranscriptSegment`, `SpeakerLabel`, `StreamIdentity` (`Local` / `Remote`), Zeitachse, Fehlertypen. Kein I/O, keine Plattform-Abhängigkeiten, `thiserror` erlaubt (ab Phase 3 zusätzlich `zeroize`) |
+| `audio` | `AudioSource`-Trait, PCM-Frame-Typen, fest dimensionierter Ringpuffer, Resampling auf 16 kHz mono |
+| `audio-win` | WASAPI Process Loopback und Mikrofon-Capture, Prozessbaum-Enumeration. Das einzige Crate, das die `unsafe`-Ausnahme ziehen darf, wenn ein konkreter Fall sie erzwingt |
 | `asr` | `SpeechToText`-Trait und whisper-rs-Implementierung, Fenster-Scheduling für den Live-Strom, GPU-/CPU-Ladder |
 | `diarize` | VAD, overlap-aware Segmentierung, inkrementelle Embedding-Extraktion, globales Clustering am Sitzungsende (sherpa-onnx) |
-| `session` | Zustandsmaschine und Orchestrator: Consent-Gate, Pipeline-Verdrahtung, Event-Bus, Sitzungs-Lebenszyklus. Hält die Zero-Persistence-Invariante |
+| `session` | Zustandsmaschine und Orchestrator (`Session`): Consent-Gate, Pipeline-Verdrahtung, Event-Bus, Sitzungs-Lebenszyklus. Hält die Zero-Persistence-Invariante |
 | `protocol` | Rendert und schreibt Markdown und JSON, Protokollkopf, Aufbewahrung und Löschung. Der einzige Schreiber |
 | `provisioning` | Modell-Allowlist, Download mit SHA-256-Prüfung, Cache-Verzeichnis. Der einzige Netzzugriff |
 | `cli` | Harness-Binary für die Phasen 1–4, bevor eine Oberfläche existiert |
@@ -25,7 +25,7 @@ Cargo-Workspace, Crates unter `crates/`, Namensschema `transcriber-<concern>`.
 ## Boundaries
 
 - Abhängigkeitsrichtung: `core` ← `audio` ← `audio-win`; `asr` und `diarize` →
-  `core` + `audio`; `session` → alle fachlichen Crates; `protocol` → nur `core`;
+  `core` + `audio`; `session` → `core` + `audio`; `protocol` → nur `core`;
   `provisioning` → `core`.
 - `protocol` hängt bewusst nicht von `audio` ab. Der einzige Weg, Audio auf Platte
   zu schreiben, wäre eine neue Kante im Abhängigkeitsgraph — und die fällt im
@@ -42,9 +42,11 @@ Cargo-Workspace, Crates unter `crates/`, Namensschema `transcriber-<concern>`.
 ## Key flows
 
 1. **Start.** Prozessliste aus `audio-win` → Nutzer wählt eine Anwendung →
-   Attestation-Dialog → `ConsentAttestation` entsteht als Wert →
-   `Session::start(consent)` aktiviert zwei `AudioSource`s (Mikrofon und
-   Prozessbaum-Loopback). Ohne diesen Wert existiert kein Startpfad.
+   Attestation-Dialog → `ConsentAttestation` entsteht als Wert → ein
+   `CapturePlan` trägt das gewählte `CaptureSubject` und die geöffneten
+   `AudioSource`s (Mikrofon und Prozessbaum-Loopback) →
+   `Session::start(consent, plan)` aktiviert die Sitzung. Ohne die Attestation
+   existiert kein Startpfad.
 2. **Live.** Jede Quelle schreibt Frames in ihren festen Ringpuffer → Resampling →
    Fan-out an zwei Konsumenten: (a) ASR-Fenster → whisper →
    `TranscriptSegment{stream, t0, t1, text}` → Event an die Oberfläche; (b) VAD

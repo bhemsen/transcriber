@@ -15,9 +15,10 @@
   `gh auth refresh` nicht — dann das Token mit `project`-Scope neu erzeugen).
 - Zusätzlich für diesen Stack, auf Windows: die in `rust-toolchain.toml`
   gepinnte Rust-Toolchain (aktuell 1.85.0, via `rustup` — installiert sich beim
-  ersten `cargo`-Aufruf im Checkout automatisch), `cargo-deny`, CMake und die
-  Visual-Studio-C++-Build-Tools. `whisper.cpp` und `sherpa-onnx` werden aus den
-  Quellen gebaut; ohne diese vier scheitert Bootstrap.
+  ersten `cargo`-Aufruf im Checkout automatisch) und `cargo-deny`. CMake und die
+  Visual-Studio-C++-Build-Tools werden erst ab Phase 2 gebraucht, wenn
+  `whisper.cpp` und `sherpa-onnx` aus den Quellen gebaut werden — in Phase 1 ist
+  Bootstrap nur `cargo fetch --locked`.
 
 ## Repository
 

@@ -74,7 +74,7 @@
 
 ## Don'ts
 
-- Kein HTTP-Client in `capture`, `asr`, `diarize` oder `protocol`.
+- Kein HTTP-Client in `audio`, `audio-win`, `asr`, `diarize` oder `protocol`.
 - Keine Python-Laufzeit und kein PyTorch im Auslieferungspaket.
 - Kein `Serialize` für Audio- oder Embedding-Typen.
 - Kein Kopieren von GPL-/AGPL-Code; `obs-pipewire-audio-capture` ist ausschließlich
