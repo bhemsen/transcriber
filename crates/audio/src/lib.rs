@@ -7,7 +7,7 @@
 //! a buffer whose capacity never changes for the lifetime of the stream.
 //!
 //! Also here: downmix and resampling to 16 kHz mono on the read side (see
-//! [`resample`]). Deliberately **not** here yet: the `AudioSource` /
+//! [`StreamResampler`]). Deliberately **not** here yet: the `AudioSource` /
 //! `SourceFactory` traits and the synthetic test-tone source — those land in
 //! a later issue of the same phase and depend on the types this crate
 //! exports — see `docs/specs/spec-capture-foundation.md`.

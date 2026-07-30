@@ -489,8 +489,36 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     verderben könnte). Belegt durch einen Test mit zwei Lesern in
     unterschiedlichem Lesetempo, die byte-identische Ausgabe liefern.
   - Der synthetische Sinus für den Resampling-Test lebt ausschließlich im
-    Testmodul von `crates/audio/src/resample.rs`, nicht als öffentliche API —
-    die Testton-Quelle samt `SourceFactory` ist Issue #7s Fläche, nicht diese.
+    Testmodul (`crates/audio/src/resample/tests.rs`), nicht als öffentliche
+    API — die Testton-Quelle samt `SourceFactory` ist Issue #7s Fläche, nicht
+    diese.
+  - **Zeroizing statt `Vec<f32>`:** die vier PCM-haltigen Felder von
+    `StreamResampler` (`raw_scratch`, `raw_leftover`, `mono_pending`,
+    `output_ready`) liegen in `Zeroizing<Vec<f32>>`, wie `RingBuffer::storage`
+    und `Frame::Samples::samples` es bereits tun — die Constitution fordert
+    das Nullen für PCM-Puffer allgemein, nicht nur für den Ringpuffer selbst.
+    Ein Review vor dem Merge deckte auf, dass ein erster Entwurf hier vier
+    unzeroisierte Felder plus zwei unzeroisierte temporäre `Vec`s pro
+    resampeltem Chunk hatte. Behoben durch zwei Änderungen: die vier Felder
+    bekamen `Zeroizing` **und** eine feste Erst-Kapazität in `new()`
+    (`chunk_frames_in`/`chunk_frames_out`), und `downmix`/`resample_one_chunk`
+    wurden umgeschrieben, um direkt in diesen Feldern zu arbeiten (Slices
+    ansehen, dann `drain`/`truncate`), statt pro Aufruf einen frischen `Vec`
+    zu bauen — damit existiert während einer Sitzung kein PCM-Sample mehr
+    außerhalb der vier `Zeroizing`-Felder und von `rubato`s eigenem
+    FFT-Overlap-Zustand (der von außen nicht zeroisierbar ist, siehe Risiko
+    unten). Reduziert nebenbei die Allokationen im Lesepfad auf praktisch
+    null im eingeschwungenen Zustand.
+  - Zwei bewusst zurückgestellte Folgefragen, als eigene Issues erfasst statt
+    nur hier vermerkt: [#33](https://github.com/bhemsen/transcriber/issues/33)
+    (`StreamResampler` prüft `RingBuffer`/`StreamFormat`-Zusammengehörigkeit
+    nicht strukturell) und
+    [#34](https://github.com/bhemsen/transcriber/issues/34) (Gruppenlaufzeit
+    von `rubato` und der nicht abrufbare Rest unter einer vollen Chunk-Größe
+    am Sitzungsende sind weder dokumentiert noch abfließbar). Beide sind kein
+    Bruch der Zusagen dieser Phase — `rubato`s eigener FFT-Zustand bleibt
+    ohnehin außerhalb der `Zeroizing`-Reichweite, unabhängig vom Ausgang von
+    #34.
 - 2026-07-30: Issue #8 (Quell-, Manifest- und Graph-Audit) legt drei
   Detailentscheidungen fest, die die Spec offen ließ:
   - Der Symbol-Scan normalisiert Whitespace vor dem Vergleich (alle
