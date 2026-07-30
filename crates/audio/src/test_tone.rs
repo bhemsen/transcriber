@@ -8,6 +8,7 @@
 //! cached asset, nothing that outlives the fields on [`TestToneSource`]
 //! itself.
 
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 use transcriber_core::{CaptureSubject, StreamIdentity};
@@ -33,13 +34,17 @@ pub struct TestToneSource {
     phase: f64,
     frames_emitted: u64,
     total_frames: Option<u64>,
+    idle_every: Option<NonZeroU64>,
+    pull_count: u64,
 }
 
 impl TestToneSource {
     /// Native-format frames produced per [`AudioSource::pull`] call that has
-    /// data left to give — 10 ms at 48 kHz, the Windows backend's own packet
-    /// granularity (`get_next_packet_size()`, spec's prior decisions), kept
-    /// the same here so a downstream resampler sees comparable chunk sizes.
+    /// data left to give — 10 ms at 48 kHz. `get_next_packet_size()` on the
+    /// real Windows loopback client (spec's prior decisions) varies with the
+    /// device period rather than landing on this exact figure, but 10 ms is
+    /// the same order of magnitude, so a downstream resampler sees
+    /// comparable chunk sizes here and on the real backend.
     const FRAMES_PER_PULL: u64 = 480;
 
     /// Amplitude well under full scale, so nothing here ever clips
@@ -57,6 +62,8 @@ impl TestToneSource {
             phase: 0.0,
             frames_emitted: 0,
             total_frames: None,
+            idle_every: None,
+            pull_count: 0,
         }
     }
 
@@ -68,6 +75,25 @@ impl TestToneSource {
     pub fn with_total_frames(mut self, frame_count: u64) -> Self {
         self.total_frames = Some(frame_count);
         self
+    }
+
+    /// Makes every `n`th `pull()` call report [`AudioSourceEvent::Idle`]
+    /// instead of a frame — the device-free stand-in for the Windows
+    /// backend's event-wait timeout (spec's prior decision: an ordinary,
+    /// non-error outcome distinct from [`AudioSourceEvent::Ended`]), so code
+    /// built against this source exercises its `Idle` handling before it
+    /// ever touches a device.
+    #[must_use]
+    pub fn with_idle_every(mut self, n: NonZeroU64) -> Self {
+        self.idle_every = Some(n);
+        self
+    }
+
+    /// Whether the current call should report `Idle` rather than produce a
+    /// frame, per [`Self::idle_every`]'s cadence.
+    fn is_idle_pull(&self) -> bool {
+        self.idle_every
+            .is_some_and(|n| self.pull_count % n.get() == 0)
     }
 
     /// Frames the next chunk may contain: the usual
@@ -121,6 +147,10 @@ impl AudioSource for TestToneSource {
                 return Ok(AudioSourceEvent::Ended);
             }
         }
+        self.pull_count += 1;
+        if self.is_idle_pull() {
+            return Ok(AudioSourceEvent::Idle);
+        }
         let len = self.next_chunk_len();
         let timestamp = self.current_timestamp();
         let samples = self.synthesize(len);
@@ -137,6 +167,8 @@ pub struct TestToneSources {
     remote_frequency_hz: f32,
     local_frequency_hz: f32,
     has_microphone: bool,
+    total_frames: Option<u64>,
+    idle_every: Option<NonZeroU64>,
 }
 
 impl TestToneSources {
@@ -162,6 +194,8 @@ impl TestToneSources {
             remote_frequency_hz: Self::REMOTE_FREQUENCY_HZ,
             local_frequency_hz: Self::LOCAL_FREQUENCY_HZ,
             has_microphone: true,
+            total_frames: None,
+            idle_every: None,
         })
     }
 
@@ -172,6 +206,41 @@ impl TestToneSources {
     pub fn without_microphone(mut self) -> Self {
         self.has_microphone = false;
         self
+    }
+
+    /// Bounds every source this factory opens to `frame_count` frames — see
+    /// [`TestToneSource::with_total_frames`]. Goes through the factory seam
+    /// rather than the direct constructor, so a two-stream session test
+    /// that only ever sees `Box<dyn SourceFactory>` can still drive both
+    /// streams to a deterministic [`AudioSourceEvent::Ended`] instead of
+    /// spinning at CPU speed against an unbounded tone.
+    #[must_use]
+    pub fn with_total_frames(mut self, frame_count: u64) -> Self {
+        self.total_frames = Some(frame_count);
+        self
+    }
+
+    /// Makes every source this factory opens report
+    /// [`AudioSourceEvent::Idle`] every `n`th `pull()` — see
+    /// [`TestToneSource::with_idle_every`].
+    #[must_use]
+    pub fn with_idle_every(mut self, n: NonZeroU64) -> Self {
+        self.idle_every = Some(n);
+        self
+    }
+
+    /// Builds one tone, applying whichever of [`Self::total_frames`] and
+    /// [`Self::idle_every`] this factory was configured with — the one
+    /// place both `open_remote` and `open_local` share that configuration.
+    fn build_source(&self, identity: StreamIdentity, frequency_hz: f32) -> TestToneSource {
+        let mut source = TestToneSource::new(identity, self.format, frequency_hz);
+        if let Some(total) = self.total_frames {
+            source = source.with_total_frames(total);
+        }
+        if let Some(n) = self.idle_every {
+            source = source.with_idle_every(n);
+        }
+        source
     }
 }
 
@@ -184,9 +253,8 @@ impl SourceFactory for TestToneSources {
         &self,
         _subject: &CaptureSubject,
     ) -> Result<Box<dyn AudioSource>, SourceFactoryError> {
-        Ok(Box::new(TestToneSource::new(
+        Ok(Box::new(self.build_source(
             StreamIdentity::Remote,
-            self.format,
             self.remote_frequency_hz,
         )))
     }
@@ -195,9 +263,8 @@ impl SourceFactory for TestToneSources {
         if !self.has_microphone {
             return Ok(None);
         }
-        Ok(Some(Box::new(TestToneSource::new(
+        Ok(Some(Box::new(self.build_source(
             StreamIdentity::Local,
-            self.format,
             self.local_frequency_hz,
         ))))
     }

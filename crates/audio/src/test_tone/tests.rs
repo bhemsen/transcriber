@@ -4,6 +4,7 @@
 //! (`docs/constitution.md`, Architecture principles).
 
 use std::f64::consts::PI;
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 use transcriber_core::{CaptureSubject, StreamIdentity};
@@ -36,6 +37,13 @@ fn pull_frame(source: &mut TestToneSource) -> Frame {
         Ok(AudioSourceEvent::Frame(frame)) => frame,
         other => panic!("expected a frame, got {other:?}"),
     }
+}
+
+fn nonzero(n: u64) -> NonZeroU64 {
+    let Some(value) = NonZeroU64::new(n) else {
+        panic!("test constant must be nonzero");
+    };
+    value
 }
 
 #[test]
@@ -125,6 +133,65 @@ fn bounded_tone_ends_exactly_after_its_frame_budget() {
     let Ok(AudioSourceEvent::Ended) = source.pull(Duration::from_millis(10)) else {
         panic!("Ended must be terminal: a further pull must keep reporting it");
     };
+}
+
+/// The device-free stand-in for the Windows backend's event-wait timeout:
+/// every third `pull()` must report `Idle` without advancing the tone or
+/// ending it, and the frame-bearing calls in between must still carry
+/// samples. Without this, `#9`'s capture loop and `#14`'s CLI would ship
+/// their `Idle` handling untested until it first meets a real device.
+#[test]
+fn with_idle_every_reports_idle_on_the_configured_cadence() {
+    let format = stereo_format();
+    let mut source =
+        TestToneSource::new(StreamIdentity::Remote, format, 440.0).with_idle_every(nonzero(3));
+
+    let mut idle_calls = 0;
+    let mut frame_calls = 0;
+    for _ in 0..9 {
+        match source.pull(Duration::from_millis(10)) {
+            Ok(AudioSourceEvent::Idle) => idle_calls += 1,
+            Ok(AudioSourceEvent::Frame(_)) => frame_calls += 1,
+            other => panic!("expected Idle or a frame, got {other:?}"),
+        }
+    }
+    assert_eq!(idle_calls, 3, "every third of 9 pulls must be Idle");
+    assert_eq!(frame_calls, 6);
+}
+
+/// A session test that only ever sees `Box<dyn SourceFactory>` — the entire
+/// rationale for making the factory injectable — must still be able to
+/// drive an opened stream through `Idle` and to a bounded `Ended`, not just
+/// the direct [`TestToneSource`] constructor.
+#[test]
+fn factory_pass_through_configures_idle_and_bounded_opened_sources() {
+    let Ok(factory) = TestToneSources::new() else {
+        panic!("the fixed 48 kHz stereo format must always construct");
+    };
+    let frame_budget = TestToneSource::FRAMES_PER_PULL * 2;
+    let factory = factory
+        .with_idle_every(nonzero(2))
+        .with_total_frames(frame_budget);
+    let subject = CaptureSubject::new("anything", 1234);
+    let Ok(mut remote) = factory.open_remote(&subject) else {
+        panic!("opening the synthetic remote source must not fail");
+    };
+
+    let mut idle_calls = 0;
+    let mut total_frames = 0u64;
+    loop {
+        match remote.pull(Duration::from_millis(10)) {
+            Ok(AudioSourceEvent::Idle) => idle_calls += 1,
+            Ok(AudioSourceEvent::Frame(frame)) => total_frames += frame.sample_count() as u64 / 2,
+            Ok(AudioSourceEvent::Ended) => break,
+            Err(error) => panic!("a bounded test tone must not error: {error}"),
+        }
+    }
+    assert!(
+        idle_calls > 0,
+        "the factory's with_idle_every must reach the opened source"
+    );
+    assert_eq!(total_frames, frame_budget);
 }
 
 #[test]

@@ -28,6 +28,15 @@ pub trait SourceFactory {
 
     /// Opens the `Remote` stream for `subject`.
     ///
+    /// The spec requires re-checking process identity by name *and start
+    /// time* between `list-sources` and `capture`, so a recycled PID cannot
+    /// be silently captured — but [`CaptureSubject`] does not yet carry a
+    /// start time, only `process_name` and `root_pid`. A backend that needs
+    /// evidence for that re-check has to source it itself (e.g. caching the
+    /// start time it observed during `list_subjects` behind its own
+    /// interior state) until `CaptureSubject` grows a field for it; that
+    /// would be a `core` change, not a change to this trait's signature.
+    ///
     /// # Errors
     ///
     /// Returns [`SourceFactoryError::Open`] if `subject` can no longer be

@@ -33,6 +33,15 @@ unused-allowed-license = "allow"
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Internal workspace crates (transcriber-core <- transcriber-audio <- ...) are
+# path dependencies with no `version` requirement — pinning one would tie a
+# crate's Cargo.toml to the workspace version and break at the next `feat:`
+# minor bump (docs/release.md: `[workspace.package] version` is the single
+# source of the version number). None of these crates publish to a registry
+# (docs/release.md: "Kein Registry-Schritt") — every one carries
+# `publish = false` — so the "any version from the registry" risk this ban
+# guards against does not apply.
+allow-wildcard-paths = true
 
 # Nothing in the workspace may pull in a cloud SDK or a Python bridge — the
 # constitution's don'ts, enforced at the dependency graph.

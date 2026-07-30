@@ -6,12 +6,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 rubato = "0.15"
 thiserror = "2"
 zeroize = "1"
-transcriber-core = { path = "../core", version = "0.1.0" }
+transcriber-core = { path = "../core" }
 
 [lints]
 workspace = true

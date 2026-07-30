@@ -652,11 +652,52 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   - `audio` bekommt mit diesem Issue seine erste interne Pfad-Abhängigkeit
     (`transcriber-core`, für `CaptureSubject`/`StreamIdentity`) — im Einklang
     mit der Abhängigkeitsrichtung `core ← audio` aus `docs/architecture.md`.
-    `cargo deny check`s `wildcards = "deny"`-Regel verlangt dafür eine
-    explizite `version`-Angabe neben `path`, sonst gilt die Pfad-Abhängigkeit
-    selbst als Wildcard-Fund.
+    `cargo deny check`s `wildcards = "deny"`-Regel meldet eine Pfad-Abhängigkeit
+    ohne `version`-Angabe als Wildcard-Fund. Ein Review vor dem Merge deckte
+    auf, dass der naheliegende Gegenzug — `version = "0.1.0"` neben `path`
+    ergänzen — den Build am nächsten Minor-Bump zerbricht: reproduziert durch
+    `[workspace.package] version` auf `0.2.0` gesetzt und `cargo metadata
+    --offline` ausgeführt, was mit `failed to select a version for the
+    requirement transcriber-core = "^0.1.0"` fehlschlägt, weil jede Crate ihre
+    Version über `version.workspace = true` erbt und die Pfad-Abhängigkeit
+    damit eine zweite, unverbundene Kopie der Versionsnummer trägt —
+    `docs/release.md` nennt `[workspace.package] version` ausdrücklich „die
+    einzige Quelle der Versionsnummer". Stattdessen: `publish = false` in
+    `crates/audio/Cargo.toml` **und** `crates/core/Cargo.toml` (ohnehin
+    korrekt — `docs/release.md`: „Kein Registry-Schritt … nichts wird nach
+    crates.io … publiziert") plus `allow-wildcard-paths = true` unter
+    `[bans]` in `deny.toml`; `version` bleibt von der Pfad-Abhängigkeit ganz
+    weg. Beide Teile sind nötig — `cargo-deny` 0.20.2 lehnt
+    `allow-wildcard-paths` allein für eine als publizierbar markierte Crate
+    ab. Belegt durch denselben `0.2.0`-Versionsbump erneut ausgeführt: löst
+    jetzt ohne Fehler auf, und `cargo deny check` bleibt grün.
   - Zurückgestellt, nicht Teil dieses Issues: eine explizite `stop()`/`close()`-
     Methode auf `AudioSource`. Rust-Ownership plus `Drop` auf der konkreten
     Backend-Implementierung genügt, um eine Ressource beim Fallenlassen
     freizugeben; eine zusätzliche Trait-Methode dafür hätte nur Fläche ohne
     einen Fall, den die Downstream-Issues bereits brauchen.
+  - Ein Review vor dem Merge deckte auf, dass `TestToneSource` `pull`s
+    `timeout`-Argument zwar entgegennahm, aber niemals `Idle` melden konnte —
+    genau der Fall, den die Spec als am häufigsten falsch behandelten nennt
+    ("für uns wäre das ein Abbruch bei jeder Gesprächspause"). Behoben durch
+    `TestToneSource::with_idle_every(n: NonZeroU64)` (jeder n-te `pull()`
+    meldet `Idle` statt eines Frames, ohne die Tonhöhe oder `frames_emitted`
+    zu verändern) und den passenden Durchgriff `TestToneSources::
+    with_idle_every`/`with_total_frames`, damit auch ein Test, der nur
+    `Box<dyn SourceFactory>` sieht (der ganze Zweck der injizierbaren
+    Fabrik), einen geöffneten Strom deterministisch durch `Idle` und bis zu
+    einem begrenzten `Ended` treiben kann, statt nur der direkte
+    `TestToneSource`-Konstruktor.
+  - Zurückgestellt, als Folge-Empfehlung ohne diesen Merge zu blockieren,
+    beide aus demselben Review: `AudioSourceError`/`SourceFactoryError`
+    tragen `reason: String` statt eines erhaltenen `#[source]`-Fehlers — für
+    `audio-win`s künftige `wasapi`-Fehler ginge damit die ursprüngliche
+    Fehlerkette verloren, sichtbar bliebe nur der formatierte Text. Und
+    `CaptureSubject` (in `core`) trägt keine Startzeit, nur `process_name`
+    und `root_pid` — der Kanal für den spec-verbindlichen Identitätscheck
+    (Name **und** Startzeit) zwischen `list-sources` und `capture` existiert
+    also in `SourceFactoryError::Open`, der Beleg dafür aber noch nicht;
+    `SourceFactory::open_remote`s Doc-Kommentar hält die Lücke jetzt fest,
+    damit `#11`/`#12` sie nicht erst beim Bauen entdecken. Beides ist eine
+    `core`- bzw. Feinschliff-Änderung, keine, die die Trait-Form dieses
+    Issues ändert.
