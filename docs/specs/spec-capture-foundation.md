@@ -1119,9 +1119,9 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     `crate::microphone` (`aec_degradation`, `microphone_absent`) nach
     demselben Muster wie `crate::loopback`: frei von `wasapi`/`windows`,
     damit beide auf einem geräte­losen CI-Runner testbar bleiben. Das
-    Modul `crate::loopback` bleibt unbenannt — die Umbenennung auf einen
-    generischeren Namen hätte Issue #12s bereits gemergten Code berührt,
-    ohne dass dieses Issue das bräuchte. Die WASAPI-Kante selbst ist auf
+    Modul `crate::loopback` wird nicht umbenannt — die Umbenennung auf
+    einen generischeren Namen hätte Issue #12s bereits gemergten Code
+    berührt, ohne dass dieses Issue das bräuchte. Die WASAPI-Kante selbst ist auf
     zwei Dateien verteilt (`sources/microphone_client.rs` und
     `sources/microphone_client/open_client.rs`), aus demselben
     400-Zeilen-Grund, den Issue #12 schon für `sources.rs` dokumentiert hat.

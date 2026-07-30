@@ -183,10 +183,10 @@ impl AudioSource for MicrophoneSource {
     }
 }
 
-/// The worker thread's body — the same shape as
-/// [`super::loopback_client::run_worker`], with a third
-/// [`ReadyReport::Absent`] outcome the loopback client has no equivalent
-/// for (a process tree, unlike a microphone, is never simply "not there").
+/// The worker thread's body — the same shape as `super::loopback_client`'s
+/// `run_worker`, with a third [`ReadyReport::Absent`] outcome the loopback
+/// client has no equivalent for (a process tree, unlike a microphone, is
+/// never simply "not there").
 fn run_worker(
     ready_tx: mpsc::Sender<ReadyReport>,
     request_rx: Receiver<Duration>,
