@@ -713,7 +713,7 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     Zeit-Repräsentation von `ConsentAttestation::confirmed_at`. `sysinfo`
     liefert Sekunden seit `UNIX_EPOCH` als `u64`; die Umrechnung
     (`UNIX_EPOCH + Duration::from_secs(..)`) passiert ausschließlich in
-    `audio-win`s Edge-Schicht (`sources.rs`), nie in `core`. Alle sechs
+    `audio-win`s Edge-Schicht (`sources.rs`), nie in `core`. Alle fünf
     bestehenden Aufrufstellen von `CaptureSubject::new` (`audio`s
     `TestToneSources` und deren Tests) sind mit `SystemTime::now()`
     mitgezogen.
@@ -760,3 +760,47 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     gerätefreien Test belegt (`walk_terminates_on_a_cycle_...`,
     `walk_stops_at_an_orphaned_parent_...`), nicht nur durch die
     Stop-Namen/PIDs selbst.
+- 2026-07-30: Ein Review vor dem Merge (frischer Agent, Opus) deckte einen
+  echten Isolations-Fund auf und führte zu vier Nachschärfungen an Issue #11,
+  alle vor dem Merge umgesetzt:
+  - **Der Fund:** `sessions.rs`s `is_excluded` prüfte nur `own_pid` und die
+    Stop-**PIDs** (0/4), nie die Stop-**Namen**. Eine Session, die
+    buchstäblich von einem stop-gelisteten Prozess selbst gehalten wird —
+    z. B. Systemklänge über einen von `svchost.exe` gehosteten
+    Audio-Dienst, ein auf Windows realer Fall — löste sich auf sich selbst
+    als Wurzel auf und wurde als Erfassungs-Ziel angeboten, dessen
+    Prozessbaum die Shell oder ein Dienst-Host ist, nicht eine Anwendung.
+    Genau der Isolationsbruch, den die Stop-Liste verhindern soll, erreicht
+    von der anderen Seite. Behoben, indem `is_stop_listed` aus
+    `process_tree.rs` `pub(crate)` wird und `is_excluded` sowohl auf die
+    rohe Session-PID als auch auf die aufgelöste Wurzel per
+    `is_stop_listed` statt der reinen PID-Liste prüft.
+  - Zwei Tests waren **vakuos**, belegt durch manuelles Mutationstesten
+    (die geprüfte Zeile entfernt, Suite blieb grün):
+    `walk_never_crosses_into_a_stop_listed_parent_pid` hatte für die
+    Stop-PID selbst keinen Prozess-Tabellen-Eintrag, sodass der
+    verwaiste-Eltern-Pfad zufällig dasselbe Ergebnis lieferte wie die
+    PID-Stop-Prüfung — behoben durch einen expliziten Eintrag für die
+    Stop-PID. `the_callers_own_process_is_excluded_even_if_active` prüfte
+    nur den Fall, in dem die rohe Session-PID bereits `own_pid` ist, nie
+    den Fall, in dem `own_pid` erst die aufgelöste Wurzel eines fremden
+    Kind-PIDs ist — ergänzt um
+    `the_callers_own_process_is_excluded_when_it_is_only_the_resolved_root`.
+    Dazu ein neuer Test `a_session_owned_by_a_stop_listed_process_produces_no_subject`
+    über alle vier Stop-Namen, und `stop_listed_pids_are_excluded_even_if_reported_active`
+    läuft jetzt über beide Stop-PIDs statt nur PID 4.
+  - `process_snapshots()` (`sources.rs`) rief `sysinfo::ProcessRefreshKind::
+    everything()`, obwohl die Funktion nur `name()`, `parent()` und
+    `start_time()` liest. Diese drei Felder werden von `sysinfo` beim
+    Entdecken eines Prozesses unbedingt befüllt, unabhängig vom Refresh-Kind
+    — `everything()` hätte zusätzlich Kommandozeile und Umgebungsblock
+    **jedes sichtbaren fremden Prozesses** (auf Windows über
+    `ReadProcessMemory` auf dessen PEB) auf den nicht-zeroisierten Heap
+    dieses Prozesses gezogen, ungenutzt. Widerspricht der
+    Datenminimierung aus `docs/vision.md`. Behoben durch
+    `ProcessRefreshKind::nothing()`.
+  - Der Doc-Kommentar auf `SourceFactory::open_remote` (`audio::factory`)
+    behauptete noch, `CaptureSubject` trage keine Startzeit — durch dieses
+    Issue nicht mehr wahr. Aktualisiert auf einen Verweis auf
+    `CaptureSubject::started_at` und `identity_still_matches`, damit #12
+    keine bereits überflüssige Umgehung baut.

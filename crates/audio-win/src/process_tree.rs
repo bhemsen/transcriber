@@ -38,7 +38,16 @@ pub(crate) struct ProcessSnapshot {
 /// by PID first (correct even with no process-table entry for it), then by
 /// name for whichever of the four stop-listed executables `processes` has a
 /// record of at `pid`.
-fn is_stop_listed(pid: u32, processes: &HashMap<u32, ProcessSnapshot>) -> bool {
+///
+/// Also used directly by [`crate::sessions::active_capture_subjects`] to
+/// exclude a session *owned by* a stop-listed process outright: without
+/// that check, a render session literally hosted by `svchost.exe` (a real
+/// case — Windows routinely plays system sounds through a service-hosted
+/// audio session) would resolve to itself as the root and get offered as a
+/// capture subject whose process tree includes far more than one
+/// application, breaking the exact source isolation the stop list exists
+/// to protect.
+pub(crate) fn is_stop_listed(pid: u32, processes: &HashMap<u32, ProcessSnapshot>) -> bool {
     if STOP_PIDS.contains(&pid) {
         return true;
     }

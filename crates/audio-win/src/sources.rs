@@ -135,9 +135,18 @@ fn session_activity(state: &wasapi::SessionState) -> SessionActivity {
 /// Every process currently visible to `sysinfo`, translated to
 /// [`ProcessSnapshot`] and keyed by PID — the only function in this crate
 /// that calls into `sysinfo`.
+///
+/// Deliberately `ProcessRefreshKind::nothing()`, not `everything()`: name,
+/// parent PID and start time — the only three fields this function reads —
+/// are populated unconditionally when `sysinfo` discovers a process, not
+/// gated by the refresh kind. `everything()` would additionally pull every
+/// visible process's command line and environment block (on Windows, via
+/// `ReadProcessMemory` on each target's PEB) into this process's
+/// non-zeroized heap for data nothing here uses — over-collection this
+/// project's data-minimisation principle does not allow.
 fn process_snapshots() -> HashMap<u32, ProcessSnapshot> {
     let refresh =
-        sysinfo::RefreshKind::nothing().with_processes(sysinfo::ProcessRefreshKind::everything());
+        sysinfo::RefreshKind::nothing().with_processes(sysinfo::ProcessRefreshKind::nothing());
     let system = sysinfo::System::new_with_specifics(refresh);
     system
         .processes()

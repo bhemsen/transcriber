@@ -49,7 +49,16 @@ fn walk_never_crosses_into_a_stop_listed_parent_name() {
 #[test]
 fn walk_never_crosses_into_a_stop_listed_parent_pid() {
     for &stop_pid in super::STOP_PIDS {
-        let processes = HashMap::from([(200, snapshot("svchost-hosted.exe", Some(stop_pid)))]);
+        // The stop PID gets its own record here deliberately: without one,
+        // the orphaned-parent branch alone would already stop the walk at
+        // 200, and the test would pass even if the PID stop-list check in
+        // `is_stop_listed` were deleted. With a record present, only the
+        // PID check itself can still stop the walk before it climbs onto
+        // `stop_pid`.
+        let processes = HashMap::from([
+            (stop_pid, snapshot("system", None)),
+            (200, snapshot("svchost-hosted.exe", Some(stop_pid))),
+        ]);
         assert_eq!(resolve_tree_root(200, &processes), 200);
     }
 }

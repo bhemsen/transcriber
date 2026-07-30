@@ -54,11 +54,43 @@ fn the_callers_own_process_is_excluded_even_if_active() {
     assert!(active_capture_subjects(&sessions, &processes, OWN_PID).is_empty());
 }
 
+/// The own-process exclusion must hold even when the session's *raw* PID
+/// differs from `OWN_PID` — a child of the harness's own process is still
+/// resolved back to `OWN_PID` as the root, and must be excluded via that
+/// resolved root, not only via a direct PID match on the session itself.
+#[test]
+fn the_callers_own_process_is_excluded_when_it_is_only_the_resolved_root() {
+    let processes = HashMap::from([
+        (OWN_PID, snapshot("harness.exe", None)),
+        (500, snapshot("harness_child.exe", Some(OWN_PID))),
+    ]);
+    let sessions = [session(500, SessionActivity::Active)];
+    assert!(active_capture_subjects(&sessions, &processes, OWN_PID).is_empty());
+}
+
 #[test]
 fn stop_listed_pids_are_excluded_even_if_reported_active() {
-    let processes = HashMap::from([(4, snapshot("system", None))]);
-    let sessions = [session(4, SessionActivity::Active)];
-    assert!(active_capture_subjects(&sessions, &processes, OWN_PID).is_empty());
+    for &stop_pid in crate::process_tree::STOP_PIDS {
+        let processes = HashMap::from([(stop_pid, snapshot("system", None))]);
+        let sessions = [session(stop_pid, SessionActivity::Active)];
+        assert!(active_capture_subjects(&sessions, &processes, OWN_PID).is_empty());
+    }
+}
+
+/// A session literally *owned by* a stop-listed process (e.g. system sounds
+/// hosted by `svchost.exe`) must not appear — without this, it would
+/// resolve to itself as the root and get offered as a capture subject
+/// whose process tree is the shell or a service host, not one application.
+#[test]
+fn a_session_owned_by_a_stop_listed_process_produces_no_subject() {
+    for stop_name in crate::process_tree::STOP_PROCESS_NAMES {
+        let processes = HashMap::from([(300, snapshot(stop_name, None))]);
+        let sessions = [session(300, SessionActivity::Active)];
+        assert!(
+            active_capture_subjects(&sessions, &processes, OWN_PID).is_empty(),
+            "a session owned by {stop_name} must not produce a subject"
+        );
+    }
 }
 
 #[test]

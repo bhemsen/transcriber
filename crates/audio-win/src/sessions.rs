@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use transcriber_core::CaptureSubject;
 
-use crate::process_tree::{ProcessSnapshot, STOP_PIDS, resolve_tree_root};
+use crate::process_tree::{ProcessSnapshot, is_stop_listed, resolve_tree_root};
 
 /// One audio session as reported by a render device's session enumerator,
 /// translated from `wasapi::AudioSessionControl` before any pure logic here
@@ -33,23 +33,27 @@ pub(crate) enum SessionActivity {
 }
 
 /// A PID excluded from the source list outright: the caller's own process,
-/// or one of the stop-list's sentinel PIDs, which never name a real
+/// or a stop-listed process (by PID or by name) — the latter check matters
+/// even here, before any tree walk, because a session literally *owned by*
+/// a stop-listed process (e.g. system sounds hosted by `svchost.exe`) would
+/// otherwise resolve to itself as the root and get offered as a capture
+/// subject whose process tree is the shell or a service host, not one
 /// application.
-fn is_excluded(pid: u32, own_pid: u32) -> bool {
-    pid == own_pid || STOP_PIDS.contains(&pid)
+fn is_excluded(pid: u32, own_pid: u32, processes: &HashMap<u32, ProcessSnapshot>) -> bool {
+    pid == own_pid || is_stop_listed(pid, processes)
 }
 
 /// Builds the deduplicated capture-subject list from every render session
 /// and the process table observed at (approximately) the same moment.
 ///
-/// Filters to [`SessionActivity::Active`]; excludes `own_pid` and the
-/// stop-list PIDs, checked on both the raw session PID and the resolved
-/// root, since either could coincide with one; and deduplicates on the
-/// *resolved* tree root, not the raw session PID, so two sessions belonging
-/// to two child processes of the same client produce one subject, not two
-/// (the spec's dedup requirement). A session whose resolved root has no
-/// matching process-table entry contributes nothing — there is no name or
-/// start time to show the user.
+/// Filters to [`SessionActivity::Active`]; excludes `own_pid` and any
+/// stop-listed process, checked on both the raw session PID and the
+/// resolved root, since either could coincide with one; and deduplicates on
+/// the *resolved* tree root, not the raw session PID, so two sessions
+/// belonging to two child processes of the same client produce one
+/// subject, not two (the spec's dedup requirement). A session whose
+/// resolved root has no matching process-table entry contributes nothing —
+/// there is no name or start time to show the user.
 pub(crate) fn active_capture_subjects(
     sessions: &[RenderSession],
     processes: &HashMap<u32, ProcessSnapshot>,
@@ -62,7 +66,9 @@ pub(crate) fn active_capture_subjects(
             continue;
         }
         let root_pid = resolve_tree_root(session.process_id, processes);
-        if is_excluded(session.process_id, own_pid) || is_excluded(root_pid, own_pid) {
+        if is_excluded(session.process_id, own_pid, processes)
+            || is_excluded(root_pid, own_pid, processes)
+        {
             continue;
         }
         if !seen_roots.insert(root_pid) {
