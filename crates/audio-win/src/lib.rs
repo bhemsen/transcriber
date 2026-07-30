@@ -10,14 +10,16 @@
 //! no audio device, so they never call into a device or the process table
 //! themselves.
 //!
-//! [`transcriber_audio::SourceFactory::list_subjects`] is the only
-//! [`transcriber_audio::SourceFactory`] method implemented so far.
-//! `open_remote` (issue #12) and `open_local` (issue #13) each return an
+//! [`transcriber_audio::SourceFactory::list_subjects`] and `open_remote`
+//! (issue #12, real WASAPI loopback capture — see [`crate::loopback`] for
+//! the pure packet-mapping logic behind it) are implemented.  `open_local`
+//! (issue #13, microphone capture with echo cancellation) still returns an
 //! explicit [`transcriber_audio::SourceFactoryError::Open`] rather than a
 //! value that looks like a working stream — a Rust trait impl must be
 //! complete, and a stub that looks like success is exactly how a broken
 //! capture path ships green.
 
+mod loopback;
 mod process_tree;
 mod sessions;
 mod sources;

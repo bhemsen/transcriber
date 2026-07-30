@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 wasapi = "0.23"
 sysinfo = "0.33"
+thiserror = "2"
 transcriber-core = { path = "../core" }
 transcriber-audio = { path = "../audio" }
 
