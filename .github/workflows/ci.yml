@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Verify
+        run: cargo xtask verify
