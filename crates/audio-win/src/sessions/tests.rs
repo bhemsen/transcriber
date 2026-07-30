@@ -68,6 +68,22 @@ fn the_callers_own_process_is_excluded_when_it_is_only_the_resolved_root() {
     assert!(active_capture_subjects(&sessions, &processes, OWN_PID).is_empty());
 }
 
+/// The normal way this harness runs is launched from a parent process (a
+/// terminal or an IDE) — so the own-process exclusion must also hold on the
+/// *raw session PID*, not only via the resolved-root check above. Without
+/// it, a session whose raw PID is `own_pid` but whose resolved root is the
+/// parent terminal would be excluded by neither disjunct on its own, and
+/// the parent terminal would be offered as a capture subject.
+#[test]
+fn the_callers_own_process_is_excluded_even_when_it_has_a_parent() {
+    let processes = HashMap::from([
+        (900, snapshot("WindowsTerminal.exe", None)),
+        (OWN_PID, snapshot("harness.exe", Some(900))),
+    ]);
+    let sessions = [session(OWN_PID, SessionActivity::Active)];
+    assert!(active_capture_subjects(&sessions, &processes, OWN_PID).is_empty());
+}
+
 #[test]
 fn stop_listed_pids_are_excluded_even_if_reported_active() {
     for &stop_pid in crate::process_tree::STOP_PIDS {

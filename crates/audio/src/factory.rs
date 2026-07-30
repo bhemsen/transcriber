@@ -31,9 +31,10 @@ pub trait SourceFactory {
     /// The spec requires re-checking process identity by name *and start
     /// time* between `list-sources` and `capture`, so a recycled PID cannot
     /// be silently captured — [`CaptureSubject::started_at`] carries the
-    /// evidence for that check, and `transcriber_audio_win::
-    /// identity_still_matches` (issue #11) implements the comparison a
-    /// backend's `open_remote` runs against a fresh process-table lookup.
+    /// evidence for that check, and
+    /// `transcriber_audio_win::identity_still_matches` (issue #11)
+    /// implements the comparison a backend's `open_remote` runs against a
+    /// fresh process-table lookup.
     ///
     /// # Errors
     ///
