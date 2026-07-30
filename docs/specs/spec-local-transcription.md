@@ -16,13 +16,14 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 - [ ] Aus **beiden** Strömen entsteht während der Sitzung fortlaufend Text, je mit
       absoluten Zeitstempeln auf der Sitzungs-Zeitachse aus Phase 1.
 - [ ] Auf dem GPU-Pfad liegt der Live-Rohtext des `Remote`-Stroms **≤ 5 s** hinter
-      dem Gesprochenen: `Hop 3 s + Inferenz ≤ 1,7 s + Overhead ≤ 0,3 s`. **Bewusste
-      Eingrenzung eines normativen Kriteriums:** `docs/vision.md` nennt „Live-Rohtext
-      ≤ 5 s" ohne Strom-Angabe; diese Spec bindet es an `Remote` und gibt `Local` ein
-      eigenes, größeres Budget (siehe die Durchsatz-Ungleichung unten).
-- [ ] Die **Durchsatz-Ungleichung** hält: `Σ Inferenz je Hop ≤ Hop` über beide
-      Ströme. Ohne sie fällt die Erkennung unbegrenzt zurück, statt nur die Latenz zu
-      reißen.
+      dem Gesprochenen: `Hop 3 s + Inferenz ≤ 1,3 s + Overhead ≤ 0,3 s = 4,6 s`.
+      **Bewusste Eingrenzung eines normativen Kriteriums:** `docs/vision.md` nennt
+      „Live-Rohtext ≤ 5 s" ohne Strom-Angabe; diese Spec bindet es an `Remote` und
+      gibt `Local` ein eigenes, größeres Budget.
+- [ ] Die **Kapazitätsungleichung** hält: `I_Remote + I_Local ≤ Hop` in jedem Hop, in
+      dem beide laufen — und `Hop ≤ Kontext` für jeden Strom. Ohne die erste fällt die
+      Erkennung unbegrenzt zurück statt nur die Latenz zu reißen; ohne die zweite
+      überspringen die Fenster Audio, statt es zu überlappen.
 - [ ] Auf einer GPU mit 8 GB VRAM greift Stufe 1 der Ladder; ohne nutzbare GPU greift
       eine CPU-Stufe und erzeugt korrekten Text (die Latenz dort: siehe die offene
       Entscheidung unten).
@@ -98,6 +99,11 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
   8. Abhängig von der Antwort auf OPEN 1: `docs/constitution.md`, Tech stack, nennt
      eine „CUDA-/Vulkan-/CPU-Ladder". Wird genau ein GPU-Backend ausgeliefert, wird
      die Zeile unwahr und ist mitzuziehen.
+  9. Abhängig von der Antwort auf OPEN 3: darf der CPU-Pfad die 5 s verfehlen, ist
+     **`docs/vision.md`, Success criteria**, mitzuziehen — die Zeile „Latenz:
+     Live-Rohtext ≤ 5 s hinter dem Gesprochenen" gilt dann für den GPU-Pfad, und der
+     CPU-Fallback bekommt eine eigene, benannte Erwartung. Ein normatives Kriterium
+     wird nicht durch eine Spec eingeschränkt, sondern im Vision-Dokument.
 
 ### Out of scope
 
@@ -208,8 +214,9 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 |---|---|---|
 | Der **Redundanzfaktor** ist explizit: `Kontext ÷ Hop`. Bei 15 s Kontext und 3 s Hop wird jede Sekunde Audio **fünfmal** encodiert. Über zwei Ströme verdoppelt sich das | Das ist die Größe, die die Machbarkeit bestimmt, und sie fehlte in der ersten Fassung dieser Spec. Ohne sie wirkt „3 s Hop lässt 2 s für die Inferenz" wie eine Rechnung, ist aber keine | 2026-07-30 |
 | `audio_ctx` wird **gesetzt** (`set_audio_ctx`), passend zur Kontextlänge — Richtwert 1500 für 30 s, also rund 768 für 15 s | Whispers Encoder hat eine **feste 30-s-Eingabe** und padded kürzeres Audio: ein 15-s-Fenster kostet ohne gesetztes `audio_ctx` genauso viel Encoder-Zeit wie ein 30-s-Fenster. Die Kontextverkürzung kauft also **nichts**, solange dieser Wert nicht gesetzt ist. Er ist qualitätswirksam (Halluzinationsrisiko bei zu kleinen Werten), deshalb: setzen, und den Effekt in der WER-Messung mitmessen | 2026-07-30 |
-| **Zwei getrennte Schranken**, weil Latenz und Durchsatz verschiedene Dinge sind. Latenz: `Hop + Inferenz + Overhead ≤ 5 s`, mit **Overhead ≤ 0,3 s** (Puffer-Lesen, Resampling, Dedup, Event) und daraus **Inferenz ≤ 1,7 s** je 15-s-Fenster. Durchsatz: **`Σ Inferenz je Hop ≤ Hop`** über **beide** Ströme | „Schneller als Echtzeit" (1×) und „Inferenz kürzer als der Hop" (< 3 s) sind beide erfüllbar, während das 5-s-Kriterium reißt. Die Inferenz-Schranke muss der **Rest** nach einem benannten Overhead sein, nicht gleich dem Budget: 3 s Hop + 2,0 s Inferenz sind bereits 5,0 s und lassen für den Overhead null. Und ohne die Durchsatz-Ungleichung reißt eine Stufe nicht bloß die Latenz — sie fällt **unbegrenzt** zurück | 2026-07-30 |
-| Deshalb hat `Local` einen **eigenen, größeren Hop**: nominal **9 s** gegen 3 s bei `Remote`. Damit kostet `Local` amortisiert rund ein Drittel von `Remote` je Remote-Hop, und die Ungleichung hält: `1,7 + 1,7/3 ≈ 2,3 s ≤ 3 s` | Bei gleichem Hop für beide Ströme wären es `1,7 + 1,7 = 3,4 s > 3 s` — Stufe 1 wäre in ihrer eigenen Nennkonfiguration dauerhaft im Rückstand, und die Ladder würde am ersten Tag abstufen. Der Preis ist rund 11 s Latenz auf `Local` (`9 + 1,7 + 0,3`), was die Remote-Priorität ausdrücklich in Kauf nimmt: der Nutzer weiß, was er selbst gesagt hat | 2026-07-30 |
+| **Drei Ungleichungen**, die nicht miteinander verrechnet werden dürfen. (1) **Latenz** `Remote`: `Hop + I + Overhead ≤ 5 s`, mit **Overhead ≤ 0,3 s** (Puffer-Lesen, Resampling, Dedup, Event). (2) **Kapazität**: `I_Remote + I_Local ≤ Hop` in jedem Hop, in dem beide laufen. (3) **`Hop ≤ Kontext`** für jeden Strom | „Schneller als Echtzeit" (1×) und „Inferenz kürzer als der Hop" (< 3 s) sind beide erfüllbar, während das 5-s-Kriterium reißt. Die Latenzschranke ist der Rest nach einem benannten Overhead, nicht das ganze Budget: 3 s Hop + 2,0 s Inferenz sind bereits 5,0 s und lassen für den Overhead null. Die Kapazitätsungleichung ist die eigentlich harte: hält sie nicht, fällt die Stufe **unbegrenzt** zurück statt bloß die Latenz zu reißen. Und `Hop ≤ Kontext` ist keine Feinheit — bei größerem Hop überlappen die Fenster nicht mehr, sie **überspringen**, und Audio wird lautlos nie transkribiert | 2026-07-30 |
+| Innerhalb eines Hops läuft **`Remote` zuerst**, `Local` danach in der verbleibenden Zeit desselben Hops; passt es nicht, wird `Local`s Fenster auf den nächsten Hop verschoben | Das ist der Grund, warum `Local` die Latenz von `Remote` **nie** verschlechtert. Liefen beide an der Hop-Grenze um die Reihenfolge, würde in jedem dritten Hop `I_Local` vor `Remote`s nächstem Fenster liegen, und dessen Text käme `I_Local` später — bei einem Budget ohne Reserve reicht das, um die 5 s zu reißen | 2026-07-30 |
+| `Local` hat den **größeren Hop**: **9 s** gegen 3 s bei `Remote` (Stufe 1), immer ≤ Kontext | Reduziert die Durchschnittslast auf ein Drittel, ohne die Kapazitätsschranke zu berühren — die gilt für den Hop, in dem beide laufen, unabhängig davon, wie selten das ist. Der Preis ist rund 11 s Latenz auf `Local` (`9 + I + Overhead`), was die Remote-Priorität ausdrücklich in Kauf nimmt: der Nutzer weiß, was er selbst gesagt hat | 2026-07-30 |
 | Absolute Zeitachse: der Scheduler addiert den Fensteranfang auf der **Sitzungs-Zeitachse aus Phase 1** zu den fensterrelativen Zeiten des `RawSegment` | Genau die Nahtstelle, über die `docs/architecture.md`, Flow 3, die Sprecherlabels „über Zeitüberlappung" legt. Fensterrelative Zeiten wären dort unbrauchbar | 2026-07-30 |
 | **Dedup-Regel:** für den Überlappungsbereich gewinnt immer das **jüngere** Fenster. `Final` wird ein Segment, sobald es **vollständig vor** dem Commit-Horizont `jetzt − (Kontext − Hop)` liegt; der Schnitt fällt auf die letzte whisper-**Segmentgrenze** vor dem Horizont, nie mitten in ein Segment | Whisper tokenisiert dasselbe Audio in zwei Fenstern unterschiedlich, also ist ein Token-Vergleich (LCS) fragil. Die von whisper selbst gelieferten Segmentgrenzen sind die einzigen stabilen Schnittpunkte. „Jüngeres Fenster gewinnt" ist richtig, weil es mehr rechten Kontext hatte | 2026-07-30 |
 | Segmente haben eine **`id`** (monoton je Strom). `Provisional` → `Final` ist ein Ersetzen über diese `id`, kein Anhängen | Ohne Identität kann ein Konsument provisorischen Text nicht ersetzen, sondern nur doppelt anzeigen | 2026-07-30 |
@@ -217,25 +224,28 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 | Fällt die Inferenz dauerhaft hinter den Hop zurück, wird der Hop **nicht** stillschweigend verlängert: die Sitzung meldet den Rückstand und die Ladder stuft ab | Ein still wachsender Hop würde das Latenzkriterium unbemerkt verletzen. Abstufen ist die ehrliche Reaktion: schlechterer Text, gehaltene Latenz | 2026-07-30 |
 | Der Scheduler bekommt eine **injizierbare Zeitquelle** | Sonst braucht ein Test für zwei Fenstergrenzen ≥ 18 s Wanduhr-Zeit — in genau dem Verify, dessen Dauer diese Phase neu messen will | 2026-07-30 |
 
+Schematisch für `jetzt = 30 s` Sitzungszeit. **Maßgeblich sind die Klammerwerte, nicht
+die Balkenbreiten** — die Zeichnung ist keine Skala.
+
 ```
-Sekunden   0    3    6    9   12   15   18   21   24   27   30
-Zeit  ─────┼────┼────┼────┼────┼────┼────┼────┼────┼────┼────▶ jetzt = 30
-Ringpuffer ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  30 s, fest
+Ringpuffer    ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓    30 s, fest
 
-Remote, Hop 3 s, Kontext 15 s
- Fenster n−1         ├───────── 15 s ─────────┤          (9 … 24)
- Fenster n              ├───────── 15 s ─────────┤       (12 … 27)
- Fenster n+1               ├───────── 15 s ─────────┤    (15 … 30)
-                        ├─3s─┤ Hop
+Remote — Kontext 15 s, Hop 3 s
+  Fenster n−1  ├──── Kontext ────┤                (  9 … 24 )
+  Fenster n       ├──── Kontext ────┤             ( 12 … 27 )
+  Fenster n+1        ├──── Kontext ────┤          ( 15 … 30 )
+                  ├Hop┤                           (   3 s   )
 
-Commit-Horizont                 ┤ jetzt − (15 − 3) = 18
- Segmente  ──── Final ──────────┤├───────── Provisional ────────┤
-            (Schnitt auf einer     (bei jedem Hop neu; das
-             whisper-Segment-        jüngere Fenster gewinnt)
-             grenze vor 18 s)
+Commit-Horizont = jetzt − (Kontext − Hop) = 30 − 12       ( 18 s )
+  Segmente     ─── Final ───┤├─── Provisional ───┤
+                Schnitt auf   jüngeres Fenster gewinnt;
+                whisper-       wird bei jedem Hop ersetzt
+                Segmentgrenze
+                vor 18 s
 
-Local, Hop 9 s — ein Fenster je drei Remote-Hops
- Fenster m                 ├───────── 15 s ─────────┤    (15 … 30)
+Local — Kontext 15 s, Hop 9 s: ein Fenster je drei Remote-Hops,
+        und stets NACH Remote innerhalb desselben Hops
+  Fenster m          ├──── Kontext ────┤          ( 15 … 30 )
 ```
 
 Ein Segment wird also rund 12–15 s nach dem Gesprochenen `Final`, während
@@ -244,17 +254,30 @@ bezieht sich auf **Live-Rohtext**, also auf `Provisional`.
 
 ### Ladder-Stufen
 
-| Stufe | Backend | Modell | Kontext | Hop `Remote` | Hop `Local` | Redundanz `Remote` | Inferenz-Schranke | Latenz `Remote` |
+| Stufe | Backend | Modell | Kontext | Hop `Remote` | Hop `Local` | Redundanz `Remote` | Inferenz-Schranke `I` | Latenz `Remote` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | GPU | `large-v3-turbo` q5_0 | 15 s | 3 s | 9 s | 5× | ≤ 1,7 s | ≤ 5 s, Kriterium gehalten |
-| 2 | CPU | `small` | 10 s | 5 s | 15 s | 2× | ≤ 3,7 s | > 5 s erwartet — siehe OPEN 3 |
-| 3 | CPU | `base` | 10 s | 5 s | 15 s | 2× | ≤ 3,7 s | > 5 s erwartet |
+| 1 | GPU | `large-v3-turbo` q5_0 | 15 s | 3 s | 9 s | 5× | **≤ 1,3 s** | `3 + 1,3 + 0,3 = 4,6 s` ✓ |
+| 2 | CPU | `small` | 10 s | 5 s | 8 s | 2× | **≤ 2,5 s** | > 5 s — siehe OPEN 3 |
+| 3 | CPU | `base` | 10 s | 5 s | 8 s | 2× | **≤ 2,5 s** | > 5 s — siehe OPEN 3 |
 
-Die Inferenz-Schranke je Stufe ist `Hop − Overhead` für die Latenz und muss zugleich
-`Σ je Hop ≤ Hop` erfüllen. Stufe 3 ist die letzte: hält **sie** die
-Durchsatz-Ungleichung nicht, gibt es nichts darunter, und die Sitzung fällt
-unbegrenzt zurück. Das ist der Fall, den OPEN 3 mitentscheiden muss — nicht bloß
-„die Latenz ist schlechter".
+So entstehen die Schranken, damit sie nachrechenbar sind und niemand sie aus der
+falschen Ungleichung ableitet:
+
+- **Stufe 1** ist von der **Kapazität** gebunden, nicht von der Latenz: beide Ströme
+  nutzen dasselbe 15-s-Fenster, kosten also gleich viel, und `I + I ≤ 3 s` ergibt
+  `I ≤ 1,5 s`. Abgerundet auf **1,3 s** für Reserve. Die Latenz ist damit automatisch
+  erfüllt (`4,6 ≤ 5 s`) — die Latenzformel allein hätte `I ≤ 1,7 s` erlaubt und die
+  Kapazität gerissen.
+- **Stufe 2 und 3** sind ausschließlich von der Kapazität gebunden: `I + I ≤ 5 s`
+  ergibt `I ≤ 2,5 s`. Die Latenzungleichung ist dort **unerfüllbar**, weil schon der
+  Hop 5 s beträgt — genau das ist der Gegenstand von OPEN 3.
+- `Hop ≤ Kontext` hält in allen Stufen (9 ≤ 15; 8 ≤ 10). Auch die
+  Abstufungs-Reaktion „`Local`-Hop vergrößern" endet an dieser Grenze, nicht bei
+  einem beliebigen Wert.
+
+Stufe 3 ist die letzte: hält **sie** die Kapazitätsungleichung nicht, gibt es nichts
+darunter, und die Sitzung fällt unbegrenzt zurück. Das ist der härtere Teil von
+OPEN 3 — nicht bloß „die Latenz ist schlechter".
 
 | Decision | Rationale | Date |
 |---|---|---|
@@ -285,7 +308,7 @@ unbegrenzt zurück. Das ist der Fall, den OPEN 3 mitentscheiden muss — nicht b
 | Kein `/loopkit:design`-Zyklus. Das Diagramm oben ist Teil der Spec, **nicht** eine Durable form nach `docs/design.md` | Phase 2 hat keine UI-Fläche, und die Live-Textansicht der CLI ist Textausgabe — der Verzicht ist auf diesem Grund legitim. Die Durable-form-Regel gilt für das Ergebnis eines Design-Zyklus; da keiner läuft, gibt es kein Artefakt, das ihr genügen müsste | 2026-07-30 |
 | OPEN — GPU-Ladder: die Backends von `whisper-rs` sind Compile-Time-Features, ein Binary trägt genau eines. `docs/constitution.md` nennt „CUDA-/Vulkan-/CPU-Ladder", was so nicht in **einen** Installer passt | resolved at the spec-acceptance gate | — |
 | OPEN — deutsches Referenzsample: es existiert kein permissiv lizenziertes deutsches **Meeting**-Korpus. Das Outcome fordert weiter ≤ 15 %; offen ist, **welches** Sample gemessen wird | resolved at the spec-acceptance gate | — |
-| OPEN — darf der CPU-Pfad das 5-s-Latenzkriterium verfehlen? `docs/vision.md` führt „Latenz ≤ 5 s" und „funktionierender CPU-Fallback" als **getrennte** Kriterien; die Rechnung oben zeigt, dass eine CPU-Stufe die 5 s realistisch nicht hält. **Ein „ja" ändert ein normatives Vision-Kriterium** und zieht wie die Audio-Ausnahme eine Dokumentänderung nach sich, ist also keine Spec-Detailfrage. Mitzuentscheiden ist der härtere Teil: hält Stufe 3 auch die **Durchsatz**-Ungleichung nicht, fällt die Sitzung unbegrenzt zurück, und darunter liegt nichts mehr | resolved at the spec-acceptance gate | — |
+| OPEN — darf der CPU-Pfad das 5-s-Latenzkriterium verfehlen? `docs/vision.md` führt „Latenz ≤ 5 s" und „funktionierender CPU-Fallback" als **getrennte** Kriterien; die Rechnung oben zeigt, dass eine CPU-Stufe die 5 s nicht hält, weil schon der Hop 5 s beträgt. **Ein „ja" ändert `docs/vision.md`, Success criteria** — Korrektur 9 zieht die Zeile dann mit, genau wie Korrektur 7 die Audio-Ausnahme. Es ist keine Spec-Detailfrage. Mitzuentscheiden ist der härtere Teil: hält Stufe 3 auch die **Kapazitäts**-Ungleichung nicht, fällt die Sitzung unbegrenzt zurück, und darunter liegt nichts mehr | resolved at the spec-acceptance gate | — |
 
 ## Tracking
 
@@ -308,8 +331,10 @@ Maschinell, in Verify und in CI auf `windows-latest` — **ohne Modell und ohne 
 - [ ] `cargo deny check` grün mit dem auf `whisper-rs`/`whisper-rs-sys` begrenzten
       Unlicense-`exceptions`-Eintrag und Einträgen für alle Crates aus dem Inventar.
 - [ ] Der Quell- und Manifest-Audit bewacht `asr`, findet dort keinen Schreib-, Netz-
-      oder `serde`-Pfad, und belegt, dass ein HTTP-Client **nur** in `provisioning`
-      vorkommt.
+      oder `serde`-Pfad, und belegt, dass ein HTTP-Client in keinem **ausgelieferten**
+      Crate außer `provisioning` vorkommt — `xtask` ist als nie ausgeliefertes
+      Entwickler-Werkzeug ausgenommen, und der Audit hält diese Ausnahme explizit,
+      nicht implizit.
 - [ ] `provisioning`-Test: falsche SHA-256 wird abgewiesen und nichts landet im Cache;
       eine URL außerhalb der Allowlist wird abgewiesen.
 - [ ] Scheduler-Test gegen eine **skriptbare** `SpeechToText`-Attrappe mit bekannter
@@ -333,13 +358,15 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
 - [ ] **Latenz GPU:** gesprochener Satz erscheint als provisorischer Rohtext ≤ 5 s
       später. Protokolliert werden Hop, gemessene Inferenzzeit je Fenster und der
       Pipeline-Overhead — die Summe ist das Kriterium, nicht die Inferenz allein.
-- [ ] **Inferenz-Schranke:** ≤ 1,7 s je 15-s-Fenster auf der 8-GB-GPU, mit gesetztem
-      `audio_ctx`, bei zwei aktiven Strömen — und der gemessene Overhead ≤ 0,3 s.
-- [ ] **Durchsatz:** über eine zehnminütige Sitzung gilt `Σ Inferenz je Hop ≤ Hop`;
-      der Rückstand wächst nicht monoton. Das ist die Prüfung, die eine dauerhaft
-      zurückfallende Stufe von einer bloß langsamen unterscheidet.
-- [ ] **`Local`-Hop:** `Local` läuft nominal mit 9 s Hop, und beide Ströme zusammen
-      halten die Ungleichung.
+- [ ] **Inferenz-Schranke:** ≤ 1,3 s je 15-s-Fenster auf der 8-GB-GPU, mit gesetztem
+      `audio_ctx` — und der gemessene Overhead ≤ 0,3 s.
+- [ ] **Kapazität:** in jedem Hop, in dem beide Ströme laufen, gilt
+      `I_Remote + I_Local ≤ Hop`. Über eine zehnminütige Sitzung wächst der Rückstand
+      **nicht monoton** — das ist die Prüfung, die eine dauerhaft zurückfallende Stufe
+      von einer bloß langsamen unterscheidet.
+- [ ] **Reihenfolge:** `Remote` läuft in jedem Hop zuerst; ein `Local`-Fenster
+      verschlechtert die `Remote`-Latenz messbar **nicht** (Vergleich einer Sitzung mit
+      und ohne `Local`-Strom).
 - [ ] **CPU-Fallback:** GPU deaktiviert → die Sitzung läuft auf Stufe 2 weiter, die
       Herkunftsangabe zeigt den Wechsel, die Latenz wird gemessen und gegen die am
       Gate getroffene Entscheidung bewertet.
@@ -359,7 +386,7 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
 
 | Risk | Mitigation |
 |---|---|
-| Die 5-s-Latenz wird trotz gesetztem `audio_ctx` verfehlt, weil zwei Ströme × 5× Redundanz die GPU überfordern | Latenz- **und** Durchsatz-Schranke sind getrennte, früh messbare Akzeptanzpunkte — die eine zu halten belegt die andere nicht. Reißt eine, sind die Hebel in dieser Reihenfolge: `audio_ctx` senken, `Local`-Hop über 9 s hinaus vergrößern, Kontext auf 10 s verkürzen. Alle drei sind Konfiguration, keine Umbauten |
+| Die 1,3-s-Schranke wird trotz gesetztem `audio_ctx` verfehlt, weil zwei Ströme × 5× Redundanz die GPU überfordern | Latenz- und Kapazitätsschranke sind getrennte, früh messbare Akzeptanzpunkte — die eine zu halten belegt die andere nicht. Reißt eine, sind die Hebel in dieser Reihenfolge: `audio_ctx` senken, `Local`-Hop vergrößern (Grenze: `Hop ≤ Kontext`, also 15 s), Kontext auf 10 s verkürzen, `Local` ganz aussetzen. Alle vier sind Konfiguration, keine Umbauten |
 | Der autoritative Transkript-Speicher wächst mit der Gesprächsdauer, während Phase 1 „Speicherverbrauch unabhängig von der Laufzeit konstant" zusagt | Kein Widerspruch, aber eine Präzisierung wert: die Zusage aus Phase 1 gilt dem **Audio**-Ringpuffer. Text wächst, und zwar in einer Größenordnung (einige zehn KB je Stunde), die neben 23 MB Ringpuffer nicht ins Gewicht fällt |
 | Ein zu kleines `audio_ctx` verschlechtert die Qualität oder erzeugt Halluzinationen | Der gewählte Wert wird mit jeder WER-Zahl dokumentiert, damit Qualität und Latenz gegeneinander sichtbar sind statt einzeln optimiert |
 | q5_0 kostet gegenüber f16 genug WER, um das englische 15-%-Ziel zu reißen | f16 ist der benannte Ausweg; dann ist das Download-Kriterium für Phase 6 neu zu bewerten. Die Messung entscheidet, nicht die Annahme |
@@ -412,10 +439,34 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
 - 2026-07-30: Ebenfalls aus Runde zwei behoben — die Durchsatzfrage, die von der
   Latenzfrage getrennt ist: eine Inferenz-Schranke von 2,0 s bei 3 s Hop lässt für
   den Overhead null, und zwei Ströme mit gleichem Hop brauchen 3,4 s je 3-s-Hop, wären
-  also in der Nennkonfiguration dauerhaft im Rückstand. Jetzt: Overhead ≤ 0,3 s,
-  Inferenz ≤ 1,7 s, `Σ Inferenz je Hop ≤ Hop`, und `Local` bekommt einen eigenen Hop
-  von 9 s. Dazu geschlossen: der Audit-Invariant, den das eigene `xtask`-Werkzeug
+  also in der Nennkonfiguration dauerhaft im Rückstand. Die daraus abgeleiteten
+  Zahlen hat Runde drei noch einmal korrigiert (siehe unten); maßgeblich ist die
+  Ladder-Tabelle. Dazu geschlossen: der Audit-Invariant, den das eigene `xtask`-Werkzeug
   gebrochen hätte; das fehlende CI-Feature-Set; die Heimat von `RawSegment`,
   `SessionOffset` und der Segment-Herkunft; und die Korrekturliste, die die
   zugesagte Constitution-Änderung nicht enthielt und sie damit aus der Definition von
   „fertig" herausfallen ließ.
+- 2026-07-30: Dritte Review-Runde, zwei falsche Zahlen und ein stiller Datenverlust.
+  Erstens war der Satz „die Inferenz-Schranke je Stufe ist `Hop − Overhead`" falsch —
+  er hätte für Stufe 1 auf 2,7 s statt 1,3 s geführt und damit genau die Verwechslung
+  von Hop-Budget und Latenz-Budget wiederholt, die Runde zwei beheben sollte. Die
+  Schranken stehen jetzt mit ihrer Herleitung in der Ladder-Tabelle: Stufe 1 ist von
+  der **Kapazität** gebunden (`I + I ≤ Hop`), nicht von der Latenz.
+  Zweitens hatte `Local` in den CPU-Stufen einen Hop von 15 s bei 10 s Kontext. Ein
+  Hop größer als der Kontext lässt die Fenster nicht überlappen, sondern
+  **überspringen**: ein Drittel des eigenen Stroms wäre lautlos nie transkribiert
+  worden, und der Commit-Horizont `jetzt − (Kontext − Hop)` hätte in der Zukunft
+  gelegen. `Hop ≤ Kontext` ist jetzt eine benannte Ungleichung, die auch die
+  Abstufungs-Reaktion begrenzt.
+  Drittens war die Kapazitätsregel als Durchschnitt formuliert, obwohl sie im
+  Kollisions-Hop gilt: in jedem dritten Hop hätten beide Ströme zusammen 3,4 s bei
+  3 s Hop gebraucht und damit `Remote`s nächstes Fenster verzögert. Gelöst nicht
+  durch eine Mittelung, sondern durch eine Reihenfolge: `Remote` läuft in jedem Hop
+  zuerst, `Local` danach in der verbleibenden Zeit. Damit kann `Local` die
+  `Remote`-Latenz nicht verschlechtern, und das ist prüfbar (Sitzung mit und ohne
+  `Local`-Strom vergleichen).
+  Außerdem: die Verification-Zeile des Audits war nicht mit dem Outcome mitgezogen und
+  hätte die `xtask`-Ausnahme weiter gebrochen; OPEN 3 nennt jetzt `docs/vision.md` und
+  hängt an Korrektur 9, statt seine Dokumentfolge nur zu erwähnen; und das Diagramm
+  hat seine erfundene Skala verloren — die Klammerwerte sind maßgeblich, die Balken
+  sind schematisch.
