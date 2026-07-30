@@ -3,10 +3,10 @@
 > Created: 2026-07-30
 
 Diese Spec liefert die Sprecherzuordnung: VAD und overlap-aware Segmentierung auf dem
-`Remote`-Strom, inkrementelle Embedding-Extraktion während der Sitzung, globales
-Clustering **einmal** am Sitzungsende, und die Zuordnung der entstehenden Labels auf
-die Transkript-Segmente über Zeitüberlappung. Sie trägt das zweite Kernversprechen
-des Projekts: **kein Stimmprofil überlebt die Sitzung**.
+`Remote`-Strom, inkrementelle Embedding-Extraktion während der Sitzung, **eigenes**
+Clustering am Sitzungsende, und die Zuordnung der Labels auf die Transkript-Segmente
+über Zeitüberlappung. Sie trägt das zweite Kernversprechen des Projekts: **kein
+Stimmprofil überlebt die Sitzung**.
 
 Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 `docs/constitution.md`, Conventions.
@@ -15,22 +15,27 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 
 - [ ] Am Sitzungsende tragen die Segmente des `Remote`-Stroms Sprecherlabels
       (`Speaker A`, `Speaker B`, …), zugeordnet über Zeitüberlappung.
-- [ ] Der `Local`-Strom trägt strukturell **„Ich"** — ohne Clustering, ohne
-      Embedding-Vergleich, allein aus der Strom-Identität aus Phase 1.
-- [ ] **DER ≤ 15 %** auf dem definierten Referenzsample mit mindestens drei Sprechern.
-- [ ] **Kein Embedding überlebt den Prozess:** nach `stop()` ist kein Embedding-Wert
-      ungleich Null mehr in den Puffern der Anwendung auffindbar, und weder im
-      Dateisystem noch in einer Datenbank existiert eines — maschinell belegt, mit
-      der unten offengelegten Grenze bezüglich der Inferenz-Laufzeit.
-- [ ] Sprecherlabels stehen **≤ 60 s nach Sitzungsende** fest — gemessen als
-      `Clustering + Zuordnung`, das Budget für das Schreiben bleibt Phase 4.
-- [ ] Der Ringpuffer-**Fan-out** aus Phase 1 trägt erstmals zwei Konsumenten: `asr`
-      und `diarize` lesen denselben Puffer über getrennte Cursor, ohne einander zu
-      kennen.
-- [ ] `diarize` hat keinen Schreib- und keinen Netzpfad, und **kein**
-      Embedding-Typ implementiert `Serialize` — der Audit-Test bewacht das Crate mit.
-- [ ] Alle drei Modelle (Segmentierung, Embedding, VAD) liegen mit Lizenz und
-      SHA-256 in der `provisioning`-Allowlist.
+- [ ] Der `Local`-Strom trägt strukturell **„Ich"** — mit den zwei dokumentierten
+      Grenzen unten (geteiltes Raummikrofon; fehlende Echokompensation).
+- [ ] **DER ≤ 15 %** auf einem Referenzsample mit mindestens drei Sprechern, gemessen
+      auf einer **Fern-/Mischmikrofon**-Spur (SDM/MDM), nicht auf Einzel-Headsets.
+- [ ] **Kein Embedding überlebt den Prozess:** nach dem Übergang nach `Ended` ist in
+      keinem von der Anwendung gehaltenen Puffer ein Embedding-Wert ungleich Null
+      auffindbar, und weder im Dateisystem noch in einer Datenbank existiert eines.
+      Die vier bekannten Grenzen dieser Zusage stehen unten und im Risikoregister.
+- [ ] `Clustering + Zuordnung` sind **≤ 20 s** nach `stop()` fertig — ein Teilbudget
+      des 60-s-Kriteriums, das dem ASR-Flush aus Phase 2 und dem Schreiben in Phase 4
+      Raum lässt.
+- [ ] Der Ringpuffer-**Fan-out** aus Phase 1 trägt erstmals zwei **reale** Konsumenten:
+      `asr` und `diarize` lesen denselben Puffer über getrennte Cursor, ohne einander
+      zu kennen, und der `diarize`-Cursor meldet über einen ganzen Lauf **keinen**
+      Verlust.
+- [ ] `diarize` hat keinen Schreib- und keinen Netzpfad, und **kein** Embedding-Typ
+      implementiert `Serialize` oder ein wertausgebendes `Debug`.
+- [ ] Alle drei Modelle liegen mit Lizenz und SHA-256 in der
+      `provisioning`-Allowlist, und die Lizenz wird **maschinell** gegen eine erlaubte
+      Menge geprüft.
+- [ ] Der Build lädt **kein** unverifiziertes Binärarchiv — weder lokal noch in CI.
 - [ ] Kein Foundation-Dokument widerspricht mehr dem Code (Liste in In scope).
 
 ## Scope
@@ -38,233 +43,295 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 ### In scope
 
 - Crate `diarize` (neu): `VoiceActivityDetector`, overlap-aware Segmentierung,
-  inkrementelle `SpeakerEmbeddingExtractor`-Nutzung, Clustering am Sitzungsende,
-  Zuordnung der Labels über Zeitüberlappung. Kein Schreib-, kein Netzpfad.
-- Crate `core`: `SpeakerLabel`, `SpeakerId`, und die Erweiterung von
-  `TranscriptSegment` um das Label. Embedding-Typen liegen **nicht** in `core` —
-  siehe die Entscheidungen.
+  inkrementelle `SpeakerEmbeddingExtractor`-Nutzung, **eigenes agglomeratives
+  Clustering in sicherem Rust**, und die Cluster→Label-Abbildung. Kein Schreib-,
+  kein Netzpfad.
+- Crate `core`: `SpeakerLabel`, `SpeakerId`, `SpeakerAssignment` (inklusive der
+  Mehrdeutigkeits-Angabe), und die Erweiterung von `TranscriptSegment` um das Label.
+  Embedding-Typen liegen **nicht** in `core`.
 - Crate `session`: `diarize` als **zweiter** Leser am Ringpuffer-Cursor; Halten der
-  Embeddings in `Zeroizing`-Puffern; explizites Nullen am Sitzungsende; Anstoßen des
-  Clusterings und der Label-Zuordnung beim Übergang nach `Stopping`.
+  Embeddings in `Zeroizing`-Puffern; explizites Nullen beim Übergang nach `Ended`;
+  Anstoßen des Clusterings **und** die Label-Zuordnung auf die `TranscriptSegment`s
+  — die Zusammenführung liegt hier, nicht in `diarize`.
 - Crate `provisioning`: die drei Modelle in die Allowlist, je mit Version, URL,
-  SHA-256 **und Lizenz**.
-- Crate `cli`: Sprecherlabels in der Ausgabe; sitzungsgebundenes Umbenennen bleibt
-  Phase 5 (Oberfläche), die Datenstruktur dafür entsteht hier.
-- `xtask`: die **opt-in** DER-Messung (`cargo xtask der`), aufbauend auf dem
-  Referenzsample-Bezug aus Phase 2; und die Erweiterung des Quell- und
-  Manifest-Audits auf `diarize`.
+  SHA-256 **und Lizenz**, plus ein Test, der die Lizenz gegen eine erlaubte Menge
+  prüft.
+- Crate `cli`: Sprecherlabels in der Ausgabe.
+- `xtask`: die **opt-in** DER-Messung (`cargo xtask der`) samt **RTTM-Parser** und
+  **DER-Scorer**; die Erweiterung des Quell- und Manifest-Audits auf `diarize`; und
+  das SHA-256-Gate für das native Archiv in `bootstrap`.
 - **Foundation-Doc-Korrekturen** — die verbindliche Aufzählung, als **ein** Schritt:
   1. `docs/architecture.md`, Boundaries: die Kante lautet nach dieser Phase
      `session` → `core` + `audio` + `asr` + `diarize`.
-  2. `docs/architecture.md`, Flow 2: der Fan-out an **zwei** Konsumenten ist ab hier
-     real und nicht mehr angekündigt; die Zeile wird auf den gebauten Zustand
-     gebracht.
-  3. `docs/architecture.md`, Flow 3: dort wird der lokale Strom „strukturell «Ich»"
-     zugeordnet — die dokumentierte Grenze (ein geteiltes Raummikrofon liefert genau
-     ein Label) gehört daneben, sonst liest sich die Zeile als Zusicherung.
-  4. `docs/constitution.md`, Architecture principles: die Zeile über
-     `Zeroizing`-Puffer bekommt die unten offengelegte Grenze — was **wir** nullen
-     können, endet an den Arenen der Inferenz-Laufzeit.
+  2. `docs/architecture.md`, Flow 2: dort steht „**Jede Quelle** … → Fan-out an zwei
+     Konsumenten". Nach dieser Phase hängt `diarize` nur am `Remote`-Strom; die Zeile
+     wird auf „der `Remote`-Strom wird an zwei Konsumenten verteilt, der `Local`-Strom
+     nur an die ASR" korrigiert.
+  3. `docs/architecture.md`, Flow 3 („der lokale Strom bekommt strukturell «Ich»"):
+     daneben gehören **beide** Grenzen — ein geteiltes Raummikrofon liefert genau ein
+     Label, **und** bei fehlender Echokompensation (Phase 1 warnt und läuft weiter)
+     kann Ton der Gegenseite im `Local`-Strom landen und dort fälschlich „Ich"
+     tragen. Ohne den zweiten Satz liest sich die Zeile als Zusicherung.
+  4. `docs/architecture.md`, Flow 4 („Umbenennen ändert ausschließlich Text im
+     geschriebenen Protokoll"): das Umbenennen ist damit eine `protocol`-Sache, nicht
+     ein veränderbares Feld an einer beendeten Sitzung. `SpeakerLabel` ist
+     **unveränderlich**; die Zeile wird entsprechend geschärft.
+  5. `docs/constitution.md` **und** `CLAUDE.md`, Regel 1: die Benchmark-Ausnahme aus
+     Phase 2 nennt namentlich `cargo xtask wer` und den Zweck „um die WER-Kriterien zu
+     messen". `cargo xtask der` fällt nicht darunter. Die Formulierung wird auf
+     „Entwickler-Werkzeuge des Repositories zur Messung der Qualitätskriterien"
+     verallgemeinert. **Cross-Milestone-Kante** auf das Phase-2-Issue, das die
+     Ausnahme schreibt — sie kann nicht zweimal unabhängig entstehen.
+  6. `docs/workflow.md`, Commands: die Zeile erwartet, dass die Verify-Dauer „mit
+     `whisper-rs` und **`sherpa-onnx`** deutlich steigt … nach Phase 2 neu messen".
+     `sherpa-onnx` kommt erst hier; die Messung wird nachgezogen.
 
 ### Out of scope
 
-- Protokoll-Ausgabe, Protokollkopf und die Sprecherzahl im Kopf — Phase 4. Diese
-  Phase erzeugt die Labels, schreibt sie nicht.
-- Sitzungsgebundenes Umbenennen der Labels in der Oberfläche — Phase 5. Die
-  Datenstruktur (`SpeakerLabel` mit einem veränderbaren Anzeigenamen) entsteht hier,
-  die Bedienung dort.
-- **Jede** Form der Wiedererkennung über Sitzungen hinweg — `docs/vision.md`,
-  Non-goals. Kein persistenter Speicher, kein Vergleich gegen frühere Sitzungen,
-  keine Export-Funktion für Embeddings.
-- Diarisierung des `Local`-Stroms. Er ist strukturell „Ich"; siehe die dokumentierte
-  Grenze.
-- Streaming-Sprecherlabels während des Gesprächs. `docs/prior-art.md` hält fest, dass
-  sherpa-onnx' Diarisierung offline/batch ist, und unser Entwurf akzeptiert das:
-  Labels sind ein Produkt des Sitzungsendes.
+- Protokoll-Ausgabe, Protokollkopf, Sprecherzahl im Kopf — Phase 4.
+- Umbenennen der Labels in der Oberfläche — Phase 5. Weil `SpeakerLabel`
+  unveränderlich ist (Korrektur 4), ist das eine reine `protocol`-Angelegenheit und
+  braucht hier keine Vorbereitung.
+- **Jede** Wiedererkennung über Sitzungen hinweg — `docs/vision.md`, Non-goals.
+- Diarisierung des `Local`-Stroms.
+- Streaming-Sprecherlabels während des Gesprächs.
 
 ## Constraints
 
-- `#![forbid(unsafe_code)]` in `diarize`. Die Bindung kapselt das FFI.
-- `diarize` hat keinen Schreibpfad und keinen HTTP-Client; das **Lesen** von
-  Modelldateien über Pfade ist erlaubt. Nur `provisioning` greift aufs Netz.
+- `#![forbid(unsafe_code)]` in `diarize`. Das schließt den Weg über
+  `sherpa-onnx-sys` auf die C-API ausdrücklich aus — die Constitution erlaubt die
+  `unsafe`-Ausnahme nur den Plattform-Backends.
+- `diarize` hat keinen Schreibpfad und keinen HTTP-Client; Modelldateien lesen ist
+  erlaubt. Nur `provisioning` greift aufs Netz.
 - Abhängigkeitsrichtung: `diarize` → `core` + `audio`; `session` → `core` + `audio` +
-  `asr` + `diarize`. **`asr` und `diarize` kennen einander nicht**
-  (`docs/architecture.md`) — zusammengeführt wird erst in `session`, über
-  Zeitüberlappung.
-- Sprecher-Embeddings liegen in `Zeroizing`-Puffern und werden bei Sitzungsende
-  explizit genullt (`docs/constitution.md`). **Kein Embedding-Typ implementiert
-  `Serialize` oder ein `Debug`, das Werte ausgibt** — Persistenz ist ein
-  Compile-Fehler.
-- Maximal 50 Zeilen je Funktion, maximal 400 Zeilen je Modul; kein `unwrap()`/
-  `expect()` außer in Tests und `main`.
-- **Abhängigkeits- und Lizenz-Inventar** dieser Phase:
+  `asr` + `diarize`. **`asr` und `diarize` kennen einander nicht.**
+- Embeddings in `Zeroizing`, kein `Serialize`, kein wertausgebendes `Debug`.
+- **Abhängigkeits- und Lizenz-Inventar** (Maßstab: Phase 2s „vollständiges Inventar"):
 
   | Gegenstand | Zweck | Lizenz | Status |
   | --- | --- | --- | --- |
-  | `sherpa-onnx` 1.13.x (crate) | VAD, Segmentierung, Embedding, Clustering | **Apache-2.0** | in `deny.toml` gedeckt |
-  | pyannote-segmentation-3.0 (ONNX) | overlap-aware Segmentierung | **MIT**, über den **un-gated** ONNX-Mirror | Allowlist-Eintrag nötig |
-  | Silero VAD (ONNX) | Sprachaktivität | **MIT** | Allowlist-Eintrag nötig |
-  | Sprecher-Embedding-Modell | Embeddings | **offen** — siehe die offene Entscheidung | Allowlist-Eintrag nötig |
-  | `zeroize` | Nullen der Embedding-Puffer | MIT/Apache-2.0 | gedeckt |
+  | `sherpa-onnx` **1.13.4**, exakt gepinnt | VAD, Segmentierung, Embedding | Apache-2.0 | gedeckt |
+  | `sherpa-onnx-sys` 1.13.4 | FFI | Apache-2.0 | gedeckt |
+  | dessen **Build-Deps** `ureq`, `tar`, `bzip2` | Archiv-Download beim Bauen | MIT/Apache-2.0 | **kollidiert mit dem Audit** — siehe unten |
+  | gevendortes `onnxruntime` (statisch, 13 Libs) | Inferenz | MIT | `cargo deny` sieht es nicht; NOTICE-relevant |
+  | pyannote-segmentation-3.0 (ONNX) | overlap-aware Segmentierung | **MIT** (LICENSE-Datei des Mirrors, Copyright 2022 CNRS — die HF-Metadaten deklarieren keine) | Allowlist |
+  | Silero VAD (ONNX) | Sprachaktivität | **MIT** | Allowlist |
+  | Sprecher-Embedding-Modell | Embeddings | **offen** — siehe unten | Allowlist |
+  | `zeroize` | Nullen der Puffer | MIT/Apache-2.0 | gedeckt |
+  | DER-Scorer (Ungarische Methode) | DER-Rechnung, nur `xtask` | zu prüfen | vor Nutzung prüfen |
 
-- **Landmine, am 2026-07-30 geprüft:** die `sherpa-onnx`-Crate linkt zwar statisch,
-  **lädt aber beim Bauen vorgefertigte Archive aus dem Netz**, sofern nicht
-  `SHERPA_ONNX_LIB_DIR` gesetzt ist. Das ist Build-Zeit, nicht Laufzeit, und
-  `cargo deny` sieht es nicht. Die Entscheidung unten regelt es ausdrücklich.
-- Die GitHub-`windows-latest`-Runner haben kein Audiogerät und keine GPU. **CI lädt
-  kein Modell**: alle Tests dort laufen gegen Attrappen und synthetische Embeddings.
+- **Der Phase-1-Audit geht an `diarize` rot, und zwar berechtigt.**
+  `xtask/tests/audit/mod.rs` blockt per Präfix (`serde`, `reqwest`, `ureq`) über den
+  **vollständigen transitiven** Graphen aus `cargo tree -e normal,build`, und
+  `sherpa-onnx-sys` führt `ureq` als Build-Dependency. Die Ausnahme wird **benannt
+  und begründet** eingetragen (wie Phase 2 es für `xtask` getan hat), nicht implizit
+  umgangen: erlaubt ist `ureq` ausschließlich als Build-Dependency von
+  `sherpa-onnx-sys`, nie als Laufzeit-Abhängigkeit eines Crates.
+- **Der Audit bekommt zwei neue Symbole:** `sherpa_onnx::write` und `Wave::write`.
+  Am 2026-07-30 geprüft: `write` ist eine **öffentliche freie Funktion** der Crate und
+  schreibt über die C-Bibliothek eine WAV-Datei. Die Blockliste der Constitution
+  (`fs::write`, `File::create`, `OpenOptions::write`, `reqwest`, `ureq`) trifft davon
+  nichts — ein einzeiliges `sherpa_onnx::write(...)` in `diarize` würde kompilieren,
+  den Audit bestehen und Roh-PCM auf die Platte schreiben. Das ist der direkteste
+  denkbare Bruch von Regel 1 in `CLAUDE.md`.
+- **Kein unverifizierter Binär-Download beim Bauen.** `SHERPA_ONNX_ARCHIVE_DIR` zeigt
+  auf ein lokal vorliegendes Archiv; `cargo xtask bootstrap` beschafft es einmal und
+  prüft SHA-256 gegen eine gepinnte Summe. Ist die Variable nicht gesetzt, ist das ein
+  **Build-Fehler**, kein stiller Download. CI setzt sie und cacht das Archiv.
+- Die `windows-latest`-Runner haben kein Audiogerät und keine GPU. **CI lädt kein
+  Modell**; alle Tests laufen gegen Attrappen und synthetische Embeddings.
 
 ## Prior art
 
 - [Speaker diarization without a Python runtime (Phase 3)](../prior-art.md#speaker-diarization-without-a-python-runtime-phase-3)
-  — trägt die ganze Phase: der Split Segmentierung → Embedding → Clustering, das
-  ADOPT „inkrementell während der Sitzung, Clustering **einmal** am Ende", statisches
-  Linken, und das AVOID „die Diarisierung als Streaming behandeln". Auch das CHECK
-  zu den Modell-Lizenzen, das die offene Entscheidung unten auslöst.
+  — der Split Segmentierung → Embedding → Clustering, das ADOPT „inkrementell während
+  der Sitzung, Clustering **einmal** am Ende", statisches Linken, das AVOID „die
+  Diarisierung als Streaming behandeln", und das CHECK zu den Modell-Lizenzen.
 - [diart / Streaming Sortformer](../prior-art.md#diart--streaming-sortformer)
-  — reference-only wegen der Python-Laufzeit, aber die Feststellung „overlap-aware
-  Systeme senken die DER um 3–7 Punkte gegenüber reinem Clustering" ist der Grund,
-  warum das Segmentierungsmodell overlap-aware sein **muss** und nicht eine
-  Komfortwahl ist.
+  — „overlap-aware Systeme senken die DER um 3–7 Punkte" ist der Grund, warum das
+  Segmentierungsmodell overlap-aware sein **muss**.
 - [Speaker identity and naming (Phase 7)](../prior-art.md#speaker-identity-and-naming-phase-7)
-  — das AVOID „Embeddings über Sitzungen hinweg persistieren" (biometrische Daten
-  nach Art. 9 DSGVO) ist die Grenze, die diese Phase einhält, und das ADOPT
-  „manuelles, sitzungsgebundenes Labeln als **primärer** Mechanismus".
+  — das AVOID „Embeddings über Sitzungen hinweg persistieren" (Art. 9 DSGVO) ist die
+  Grenze, die diese Phase einhält.
 
 ## Human prerequisites
 
-- [ ] Entscheidung zum Sprecher-Embedding-Modell am Gate (siehe unten) — sie bestimmt
-      die Lizenzlage des ausgelieferten Pakets.
-- [ ] Ein Referenzsample mit **Sprecher-Annotationen** und mindestens drei Sprechern.
-      Der AMI-Auszug aus Phase 2 erfüllt beides und wird wiederverwendet; nichts
-      Neues zu liefern, sofern Phase 2 ihn eingerichtet hat.
+- [ ] Entscheidung zum Sprecher-Embedding-Modell am Gate (siehe unten).
+- [ ] Ein Referenzsample mit **zeitgestempelten Sprecher-Annotationen** (RTTM-förmig)
+      und mindestens drei Sprechern, auf einer **SDM/MDM**-Spur. Das ist **nicht**
+      dasselbe Artefakt wie Phase 2s WER-Auszug: dort genügt ein Referenz*transkript*,
+      und die naheliegende WER-Wahl ist die saubere Einzel-Headset-Spur (IHM), auf der
+      Diarisierung trivial und die Zahl wertlos wäre.
 - [ ] Für den QA-Smoke-Test: ein Call mit **mindestens drei** Personen auf der
-      Gegenseite. Ohne das ist das Sprecherkriterium nicht am echten System prüfbar.
-- [ ] Keine Secrets, keine Accounts. Alle Modellquellen sind öffentlich und
-      unauthentifiziert; die Segmentierung kommt ausdrücklich über den **un-gated**
+      Gegenseite.
+- [ ] Keine Secrets, keine Accounts; die Segmentierung kommt über den **un-gated**
       Mirror, damit kein Hugging-Face-Login nötig ist.
 
 ## Prior decisions
 
-### Die Bindung und der Zuschnitt
+### Bindung, Clustering und der Build
 
 | Decision | Rationale | Date |
 |---|---|---|
-| Bindung ist die Crate **`sherpa-onnx` 1.13.x** (Apache-2.0), **nicht** `sherpa-rs` | Am 2026-07-30 geprüft: `sherpa-rs` ist seit Juni 2026 **archiviert** und read-only, und sein Maintainer verweist selbst auf die offiziellen Bindungen. Apache-2.0 ist in `deny.toml` gedeckt, statisches Linken ist der Default | 2026-07-30 |
-| Verwendet werden die **Komponenten**: `VoiceActivityDetector`, `SpeakerEmbeddingExtractor` über `OnlineStream`, und `FastClusteringConfig` als eigener Schritt. **Nicht** `OfflineSpeakerDiarization` | Am 2026-07-30 an der API geprüft: alle drei existieren getrennt, und genau das macht unseren Entwurf möglich. `OfflineSpeakerDiarization` verlangt das vollständige Audio am Stück — wir haben es nie, weil der Ringpuffer nach 30 s überschreibt. Der Batch-Weg wäre nicht nur langsamer, er wäre mit der Null-Persistenz-Zusage **unvereinbar** | 2026-07-30 |
-| Der Build darf **keine unverifizierten Binärarchive** ziehen: entweder die Crate wird so konfiguriert, dass sie Prüfsummen verifiziert, oder es wird über `SHERPA_ONNX_LIB_DIR` aus den Quellen gebaut | Die Crate lädt sonst beim Bauen vorgefertigte Archive, und `cargo deny` sieht davon nichts. Für ein Projekt, dessen Kern eine Datenschutz- und Integritätszusage ist, wäre eine ungeprüfte Binärquelle im Build der unsauberste denkbare Punkt. Kostet Bauzeit; das ist der Preis | 2026-07-30 |
-| Segmentierungsmodell: **pyannote-segmentation-3.0** über den **un-gated** ONNX-Mirror (MIT) | Am 2026-07-30 geprüft: MIT, und der un-gated Mirror vermeidet die Zugangsbeschränkung des Originals — sonst bräuchte jeder Nutzer einen Hugging-Face-Account, was dem Kriterium „≤ 15 Minuten bis zum ersten Protokoll" widerspräche. Overlap-aware ist nach `docs/prior-art.md` der größte einzelne DER-Hebel | 2026-07-30 |
-| VAD: **Silero VAD** (MIT), nicht TEN VAD | Am 2026-07-30 geprüft: TEN VAD ist messbar besser (schnellere Sprach-/Pausenübergänge, weniger Speicher), steht aber unter einer **modifizierten** Apache-2.0-Fassung. „Modifiziert" ist nicht „Apache-2.0" und würde das Lizenz-Gate aufweichen. Silero ist MIT und gedeckt. Erweist sich die VAD-Latenz als Problem, ist TEN VAD eine begründete Wiedervorlage — mit Lizenzprüfung, nicht nebenbei | 2026-07-30 |
+| Bindung ist **`sherpa-onnx` 1.13.4** (Apache-2.0, exakt gepinnt), **nicht** `sherpa-rs` | Am 2026-07-30 geprüft: `sherpa-rs` ist seit 2026-06-06 archiviert, sein Maintainer verweist auf die offiziellen Bindungen. Exakte Pinnung statt `1.13.x`, weil die Versionsnummer der C-Bibliothek folgt und nicht der API-Stabilität (27 Versionen, Sprung von 0.1.13 auf 1.12.30) | 2026-07-30 |
+| Verwendet werden **`VoiceActivityDetector`** und **`SpeakerEmbeddingExtractor`** über `OnlineStream`. **Das Clustering schreiben wir selbst**, in sicherem Rust in `diarize`: Kosinus-Distanz plus agglomeratives Clustering mit Schwellenwert | **Korrektur einer falschen Annahme der ersten Fassung.** Gegen die veröffentlichte 1.13.4 geprüft: `FastClusteringConfig` hat genau zwei öffentliche Felder (`num_clusters`, `threshold`) und **keine** Methoden; es existiert **keine** exportierte Funktion, die Embeddings entgegennimmt und Labels liefert. Einziger Einstieg ist `OfflineSpeakerDiarization::process(&[f32])` — der nimmt **rohes Audio**, nicht Embeddings, und macht alles intern. Der Batch-Weg ist mit der Null-Persistenz-Zusage unvereinbar (wir haben das vollständige Audio nie, der Ringpuffer überschreibt nach 30 s), und `sherpa-onnx-sys` direkt zu rufen verbietet `#![forbid(unsafe_code)]`. Eigenes Clustering ist damit nicht die bequemste, sondern die **einzige** verbleibende Option — und es hat drei echte Vorteile: der Schwellenwert wird wirklich unser Parameter, es entfällt eine FFI-Kopie jedes Embeddings, und der Code ist ohne Modell testbar | 2026-07-30 |
+| Segmentierungsmodell **pyannote-segmentation-3.0** über den un-gated ONNX-Mirror (MIT laut LICENSE-Datei des Mirrors) | Am 2026-07-30 geprüft: das Original ist gated („You need to agree to share your contact information"), der Mirror nicht und trägt MIT weiter. Ohne ihn bräuchte jeder Nutzer einen Hugging-Face-Account — unvereinbar mit „≤ 15 Minuten bis zum ersten Protokoll". Der Allowlist-Eintrag verweist auf die **LICENSE-Datei**, nicht auf die Model-Card, die keine Lizenz deklariert | 2026-07-30 |
+| VAD: **Silero VAD** (MIT), nicht TEN VAD | Am 2026-07-30 geprüft: TEN VADs Lizenz ist eine modifizierte Apache-2.0-Fassung **mit Wettbewerbsklausel** („may not Deploy … in a way that competes with Agora's offerings") und Copyleft-artiger Bindung von Derivaten. Ein `Apache-2.0`-Eintrag in der Allowlist würde sie stillschweigend durchwinken — das Gate würde nicht bloß aufgeweicht, es würde blind. `src/vad.rs` exportiert `TenVadModelConfig` neben `SileroVadModelConfig`, die Verwechslung ist also einen Tippfehler entfernt | 2026-07-30 |
+| Der Build nutzt `SHERPA_ONNX_ARCHIVE_DIR` plus ein eigenes SHA-256-Gate in `cargo xtask bootstrap`; fehlt die Variable, bricht der Build ab | **Korrektur der ersten Fassung**, die beide Zweige falsch beschrieb: eine Prüfsummen-Konfiguration existiert in der Crate **nicht** (ein Scan von `build.rs` findet nur `HashSet`), und `SHERPA_ONNX_LIB_DIR` baut nichts aus Quellen, sondern zeigt auf **fertige** Bibliotheken. `SHERPA_ONNX_ARCHIVE_DIR` ist der real existierende Hebel. Ohne diese Regel lädt jeder CI-Lauf ein ungeprüftes Archiv — genau das, was die Entscheidung verbietet | 2026-07-30 |
 
-### Der Datenpfad und das Nullen
-
-| Decision | Rationale | Date |
-|---|---|---|
-| `diarize` liest über einen **eigenen** Ringpuffer-Cursor aus Phase 1 — der erste echte Fan-out | Phase 1 hat die Cursor-API gebaut und den Fan-out ausdrücklich auf Phase 2/3 vertagt; hier wird das Versprechen eingelöst. `asr` und `diarize` bleiben voneinander unabhängig, wie `docs/architecture.md` es verlangt | 2026-07-30 |
-| Embedding-Typen liegen in **`diarize`**, nicht in `core` | `protocol` darf laut Boundaries nur `core` kennen. Läge ein Embedding-Typ in `core`, wäre er für den Schreiber erreichbar — genau die Kante, die der Abhängigkeitsgraph verhindern soll. Nach `core` geht nur das **Label**, nie der Vektor | 2026-07-30 |
-| Embeddings liegen in `Zeroizing`-Puffern, werden beim Übergang nach `Ended` explizit genullt, implementieren **kein** `Serialize` und **kein** wertausgebendes `Debug` | `docs/constitution.md`. Der Audit-Test aus Phase 1 wird auf `diarize` erweitert und prüft `Serialize`/`serde` mit — eine negative Trait-Zusicherung lässt sich nicht ausdrücken, ein Quell- und Manifest-Scan schon | 2026-07-30 |
-| **Offengelegte Grenze der Null-Zusage:** genullt werden **unsere** Puffer. Was die ONNX-Laufzeit intern in ihren Arenen hält, können wir weder erreichen noch nullen. Die Zusage lautet deshalb präzise: kein Embedding in einem von der Anwendung gehaltenen Puffer, keines im Dateisystem, keines in einer Datenbank | Ohne diese Grenze wäre das Kriterium „nach Sitzungsende ist kein Embedding mehr auffindbar" eine Zusage über fremden Speicher, die wir nicht halten können. `docs/constitution.md` wird entsprechend präzisiert (Korrektur 4). Ehrlich begrenzt ist mehr wert als absolut behauptet | 2026-07-30 |
-| Die Embedding-Sammlung wächst mit der Gesprächsdauer und ist damit **nicht** konstant wie der Ringpuffer | Kein Widerspruch zu Phase 1, aber eine Präzisierung wert: rund 1 000 Sprachsegmente je Stunde × 192 Werte × 4 B ≈ 0,8 MB — neben 23 MB Ringpuffer ohne Gewicht. Eine feste Obergrenze wäre schlechter: sie würde Sprecher verlieren statt Speicher zu sparen | 2026-07-30 |
-
-### Clustering und Zuordnung
+### Nahtstellen und Threading
 
 | Decision | Rationale | Date |
 |---|---|---|
-| Geclustert wird **einmal**, beim Übergang `Stopping → Ended`, über alle Embeddings des `Remote`-Stroms | `docs/prior-art.md` ADOPT: inkrementell extrahieren, einmal clustern. Das liefert globalen Kontext — ein Sprecher, der erst nach 40 Minuten wieder spricht, landet im selben Cluster — ohne je das vollständige Audio zu puffern | 2026-07-30 |
-| Die **Sprecherzahl wird nicht vorgegeben**, sondern über einen Schwellenwert bestimmt (`FastClusteringConfig` mit Cluster-Schwelle statt fixem `num_clusters`) | Niemand weiß vor dem Gespräch, wie viele Menschen auf der Gegenseite sitzen. Eine feste Zahl wäre eine Eingabe, die die Oberfläche erfragen müsste — und die das Kriterium „mindestens drei Gegenseiten-Sprecher" nur zufällig träfe. Der Schwellenwert wird über die DER-Messung kalibriert, nicht geraten | 2026-07-30 |
-| Labels werden über **Zeitüberlappung** auf die `TranscriptSegment`s gelegt; bei mehreren überlappenden Sprechern gewinnt der mit der größten Überlappung, und die Mehrdeutigkeit wird am Segment vermerkt | `docs/architecture.md`, Flow 3. Overlap-aware Segmentierung erzeugt **absichtlich** überlappende Sprecherbereiche; ohne eine Regel wäre unklar, welches Label ein Segment bekommt. Der Vermerk ist die Grundlage dafür, dass Phase 4 Unsicherheit sichtbar machen kann statt sie zu glätten | 2026-07-30 |
-| Beide Zeitachsen sind die **Sitzungs-Zeitachse aus Phase 1** | `asr` und `diarize` kennen einander nicht; die gemeinsame Achse ist das einzige, worüber sie zusammenfinden. Ohne sie wäre die Zuordnung nicht berechenbar — genau der Grund, warum Phase 1 die gemeinsame Sitzungs-Null festgeschrieben hat | 2026-07-30 |
-| Der `Local`-Strom bekommt **strukturell** „Ich", ohne Clustering. **Dokumentierte Grenze:** ein geteiltes Raummikrofon liefert genau ein Label, auch wenn mehrere Menschen hineinsprechen | `docs/vision.md` begründet die 100-%-Zusage ausdrücklich „strukturell über getrennte Ströme" — sie gilt für die Trennung Ich/Gegenseite, nicht für die Trennung mehrerer Personen an einem Mikrofon. Das ist eine Grenze, keine Lücke, und sie gehört sichtbar in `docs/architecture.md` (Korrektur 3) statt in eine Fußnote | 2026-07-30 |
+| Öffentliche API von `diarize`: `Diarizer::push(&mut self, pcm_16k_mono: &[f32], t0: SessionOffset) -> Result<(), DiarizeError>` während der Sitzung, und `Diarizer::finish(self) -> Result<Vec<SpeakerSpan>, DiarizeError>` am Ende. `SpeakerSpan { speaker: SpeakerId, t0, t1 }` | `session` **schiebt** Frames hinein und behält damit die Kontrolle über Reihenfolge und Zeitachse; `diarize` zieht nirgends. `finish` verbraucht `self`, damit die Embeddings nach dem Clustering nicht weiterleben können — das Typsystem erzwingt das Ende ihrer Lebensdauer | 2026-07-30 |
+| Die **Label-Zuordnung liegt in `session`**, nicht in `diarize` | Die erste Fassung widersprach sich hier dreifach. `diarize` liefert `SpeakerSpan`s auf der Sitzungs-Zeitachse; `session` legt sie über die `TranscriptSegment`s. Läge die Zuordnung in `diarize`, müsste `diarize` `TranscriptSegment` kennen — genau die Kante, die „`asr` und `diarize` kennen einander nicht" verhindert | 2026-07-30 |
+| `diarize` läuft auf einem **eigenen** Thread, CPU-only, mit auf 2 begrenzter onnxruntime-Threadzahl. Der Ringpuffer wird über einen `Mutex` geteilt; Leser halten ihn nur für die Dauer eines `read` | Die Cursor-API aus Phase 1 (`add_reader(&mut self)`, `read(&mut self, …)`) verlangt exklusiven Zugriff, und in `crates/audio` gibt es heute **kein** `Arc`/`Mutex` — der erste echte Fan-out ist damit auch die erste Synchronisationsentscheidung. CPU-only und begrenzte Threads, damit Phase 2s Kapazitätsungleichung auf der GPU unberührt bleibt | 2026-07-30 |
+| Phase 2s Ungleichung bekommt einen **dritten Term**: `I_Remote + I_Local ≤ Hop` gilt weiter für die GPU; `diarize` läuft daneben auf CPU-Threads und darf den ASR-Rückstand nicht wachsen lassen — maschinell geprüft über `loss_count` des `diarize`-Cursors, das über einen ganzen Lauf **0** bleiben muss | Ein Rückstand von `diarize` ist teurer als einer von `asr`: der Ringpuffer überschreibt nach 30 s, verlorene Sprache heißt verlorene Embeddings, und ein ganzer Sprecher kann verschwinden. Eine Beobachtung („der Rückstand wächst nicht") ist dafür zu schwach; es braucht eine Schranke | 2026-07-30 |
+
+### Segmentierung, Embedding, Clustering
+
+| Decision | Rationale | Date |
+|---|---|---|
+| Ein Embedding entsteht nur aus **nicht-überlappten** Sprachanteilen eines Sprecherbereichs, und nur wenn davon **≥ 1,0 s** zusammenkommen | Overlap-aware Segmentierung erzeugt überlappende Bereiche **absichtlich**; ein Embedding aus überlappter Sprache mischt zwei Stimmen und verschiebt den Cluster-Schwerpunkt. Genau der Vorteil des Modells würde sich sonst in einen Nachteil verkehren. Die 1,0-s-Grenze, weil kürzere Ausschnitte unzuverlässige Embeddings liefern | 2026-07-30 |
+| Cluster-Schwellenwert: Startwert **0,55** Kosinus-Distanz, als Konstante in `diarize`, kalibriert über `cargo xtask der` | Ein „wird kalibriert"-Versprechen ohne Startwert wäre eine Lücke: die DER-Messung ist opt-in, und ohne sie muss trotzdem etwas gelten. Der Startwert ist ein Ausgangspunkt, kein Ergebnis, und wird mit jeder DER-Zahl zusammen dokumentiert | 2026-07-30 |
+| Entartete Fälle sind Teil des Vertrags: **ein** Cluster (das 1:1-Gespräch — der häufigste Zuschnitt überhaupt) ergibt genau `Speaker A`; **null** Embeddings (die Gegenseite schwieg) ergeben eine leere Zuordnung und keinen Fehler | Ein Clustering-Test mit drei sauber getrennten Sprechern beweist den einfachen Fall. Die entarteten Fälle sind die häufigen, und ohne Festlegung erfindet sie der Implementierer | 2026-07-30 |
+| Bei mehreren überlappenden Sprecherbereichen bekommt ein `TranscriptSegment` das Label mit der größten Zeitüberlappung; die Mehrdeutigkeit wird als `SpeakerAssignment { primary: SpeakerId, overlap_ratio: f32, runner_up: Option<SpeakerId> }` geführt | „Mehrdeutigkeit wird vermerkt" ohne Typ wäre für Phase 4 unbrauchbar. `overlap_ratio` erlaubt es dort, Unsicherheit sichtbar zu machen, statt sie zu glätten | 2026-07-30 |
+| Fehlt eines der drei Modelle und schlägt der Download fehl, startet die Sitzung **nicht** — der Fehler erscheint vor dem Consent-Schritt | Konsistent mit Phase 2 (fehlendes ASR-Modell) und unterschieden vom fehlenden Mikrofon in Phase 1: eine Sitzung ohne Sprecherzuordnung wäre kein degradiertes, sondern ein anderes Produkt, und niemand soll dafür eine Attestation bestätigen | 2026-07-30 |
+| `SpeakerLabel` ist **unveränderlich** | `docs/architecture.md`, Flow 4: Umbenennen ändert ausschließlich Text im geschriebenen Protokoll. Ein veränderbares Feld an einer nach Phase 1 **terminalen** `Ended`-Sitzung wäre für Phase 5 ohnehin nicht erreichbar | 2026-07-30 |
+
+### Das Nullen — vier Grenzen, nicht eine
+
+| Decision | Rationale | Date |
+|---|---|---|
+| Der Embedding-Speicher wird **einmal** mit fester Kapazität allokiert und in Blöcken erweitert, wobei der alte Block vor der Freigabe explizit genullt wird | `Zeroizing` nullt beim `Drop` die **aktuelle** Allokation. Wächst ein `Vec`, wird der alte Block kopiert und **ungenullt** freigegeben. Phase 1 hat genau diesen Fund schon gemacht und behoben (feste Erst-Kapazität, `RingBuffer::storage` als einmal voll allokiertes `Zeroizing<Vec<f32>>`); die erste Fassung dieser Spec hat das Muster wieder eingeführt, das Phase 1s Review entfernt hatte | 2026-07-30 |
+| Das Ergebnis von `SpeakerEmbeddingExtractor::compute()` wird **unmittelbar** in `Zeroizing` überführt, die Zwischenallokation genullt, und der C-seitige Extraktor nach `finish` explizit freigegeben | `compute()` liefert einen **nackten `Vec<f32>`** — jedes Embedding existiert also zuerst in einer nicht-zeroisierten Allokation. Das ist keine „Arena der Inferenz-Laufzeit", sondern die Nahtstelle, die wir selbst aufrufen, und sie ist erreichbar | 2026-07-30 |
+| Genullt wird beim Übergang nach **`Ended`**, nicht bei `stop()` | Zwischen `request_stop` und `end` liegen nach Phase 1s Zustandsmaschine zwei Kanten und laut Budget bis zu 20 s, in denen die Embeddings für das Clustering notwendigerweise **leben**. Die erste Fassung schrieb „nach `stop()`" und war damit schlicht falsch | 2026-07-30 |
+| Der Audit prüft auch auf **`Debug`** an Embedding-Typen, nicht nur auf `Serialize` | `Zeroizing<T>` implementiert `Debug`, wenn `T` es tut — ein `#[derive(Debug)]` gäbe die Werte aus, und die Constraints fordern das Gegenteil, ohne dass ein Gate es bisher sah | 2026-07-30 |
+| **Keine** Änderung an `docs/constitution.md` für die Null-Grenzen | Die erste Fassung wollte die Zeile abschwächen. Falsch, aus drei Gründen: die Constitution-Zeile ist eine **Anweisung** („Embeddings liegen in `Zeroizing`-Puffern und werden … genullt"), keine Abwesenheitsbehauptung, überclaimt also nichts; das Vision-Kriterium ist bereits auf „weder im Dateisystem noch in einer Datenbank" begrenzt; und Phase 1 stand vor demselben Problem (`rubato`s FFT-Zustand hält PCM, von außen nicht zeroisierbar) und hat es als **Risiko plus Issue #34** geführt, ohne die Constitution anzufassen. Dieselbe Antwort hier. Die vollständige Grenze — Realloc, die nackte `compute()`-Allokation, Swap/Pagefile und Crash-Dumps, die ONNX-Arenen — steht im Risikoregister und gehört in Phase 6 in die README, nicht in eine abgeschwächte normative Regel | 2026-07-30 |
 
 ### Gates
 
 | Decision | Rationale | Date |
 |---|---|---|
-| Die DER-Messung ist **opt-in** (`cargo xtask der`) und nicht Teil von Verify, aufbauend auf dem Referenzsample-Bezug aus Phase 2 (in `xtask`, nie in `provisioning`) | Dieselbe Begründung wie bei der WER-Messung: Verify ist das Gate je Iteration und muss schnell und netzfrei bleiben. Der AMI-Auszug trägt beide Messungen, weil er Sprecher-Annotationen **und** Transkripte hat — eine Quelle, zwei Kriterien | 2026-07-30 |
-| DER wird mit ausgewiesener **Collar**- und Overlap-Behandlung gemessen und beides mit dem Ergebnis dokumentiert | Wie bei der WER-Normalisierung: ohne festgeschriebene Konvention ist eine DER-Zahl nicht vergleichbar, und die Behandlung überlappender Sprache verschiebt sie um mehrere Punkte — ausgerechnet dort, wo unser Segmentierungsmodell seinen Vorteil hat | 2026-07-30 |
-| Alle Maschinen-Tests laufen gegen **synthetische Embeddings** und Attrappen, ohne Modell und ohne Audiogerät | CI hat weder GPU noch Audiogerät, und ein Test, der Modelle lädt, würde Verify netzabhängig machen — dieselbe Falle, die in Phase 2 zweimal aufgefallen ist. Clustering, Zuordnungsregel und Nullen sind alle ohne echte Sprache prüfbar | 2026-07-30 |
-| Kein `/loopkit:design`-Zyklus | Keine UI-Fläche in dieser Phase; die Ausgabe bleibt die CLI. Der Sprecher-Chip und das Umbenennen sind in `docs/design.md` bereits als Komponenten festgelegt und werden in Phase 5 entworfen | 2026-07-30 |
-| OPEN — **Sprecher-Embedding-Modell.** sherpa-onnx unterstützt 3D-Speaker-, WeSpeaker- und NeMo-Modelle und weist die Lizenzen ausdrücklich dem Nutzer zu. Die stärksten Modelle sind auf VoxCeleb trainiert, dessen Daten-Terms auf Forschung beschränkt sind — für ein Apache-2.0-Produkt ein echter Konflikt zwischen Messwert und Lizenzlage | resolved at the spec-acceptance gate | — |
+| `Clustering + Zuordnung` bekommen ein **Teilbudget von 20 s** der 60 s aus `docs/vision.md` | Die erste Fassung beanspruchte das ganze Budget und ließ Phase 4 nichts — obwohl Phase 2 bereits einen Teil reserviert hat („das Vision-Budget muss diesen Lauf enthalten", über den ASR-Flush). Beide laufen im selben Zustandsübergang. Reihenfolge: das Clustering darf **parallel** zum ASR-Flush laufen, die Zuordnung nicht — sie braucht beide Ergebnisse. Am QA-Gate werden die drei Anteile **getrennt** gemessen | 2026-07-30 |
+| Die DER-Messung ist **opt-in** (`cargo xtask der`), mit ausgewiesener Collar- und Overlap-Konvention | Wie bei der WER-Messung: Verify bleibt schnell und netzfrei. Ohne festgeschriebene Konvention ist eine DER-Zahl nicht vergleichbar, und die Overlap-Behandlung verschiebt sie ausgerechnet dort, wo unser Modell seinen Vorteil hat | 2026-07-30 |
+| Der DER-Scorer (Ungarische Methode für die Cluster↔Referenz-Zuordnung, plus Missed/False-Alarm/Confusion) und der **RTTM-Parser** sind eingeplante Arbeit dieser Phase | DER ist keine Editierdistanz wie WER. Das stillschweigend anzunehmen wäre eine versteckte Aufgabe — Phase 2 hat denselben Punkt für den Transkript-Parser ausdrücklich eingeplant | 2026-07-30 |
+| Alle Maschinen-Tests laufen gegen **synthetische Embeddings** und Attrappen | CI hat weder GPU noch Audiogerät; ein Test, der Modelle lädt, würde Verify netzabhängig machen — die Falle, die in Phase 2 zweimal auffiel. Clustering, Zuordnungsregel und Nullen sind ohne echte Sprache prüfbar | 2026-07-30 |
+| Kein `/loopkit:design`-Zyklus | Keine UI-Fläche; die Ausgabe bleibt die CLI. `docs/design.md` führt den Sprecher-Chip als Teil der `Transcript-Line`; ein Umbenennen kommt dort als Komponente nicht vor und wird in Phase 5 entworfen | 2026-07-30 |
+| OPEN — **Sprecher-Embedding-Modell.** sherpa-onnx weist die Lizenzprüfung ausdrücklich dem Nutzer zu („Each model has its own license"). Die starken Kandidaten sind VoxCeleb-trainiert: **CC BY 4.0**, kommerzielle Nutzung ausdrücklich **erlaubt**, mit Namensnennungspflicht — die Prosa der Datensatz-Startseite sagt abweichend „for research purposes" und widerspricht damit der Lizenz, die sie selbst nennt; das Urheberrecht an den zugrunde liegenden Videos bleibt bei den Rechteinhabern. Zu entscheiden ist zwischen Namensnennung plus Restunsicherheit und Alternativen (CNCeleb, VoxBlink2) | resolved at the spec-acceptance gate | — |
 
 ## Tracking
 
 - Milestone: Phase 3 — Sprechertrennung (angelegt am Spec-Acceptance-Gate)
 - Issues: entstehen aus dieser Spec, sobald sie gemergt ist
-- `Depends on milestone: #1, #2`. Diese Phase braucht den Ringpuffer-Cursor und die
-  Sitzungs-Zeitachse aus Phase 1, die `TranscriptSegment`-Typen und `provisioning`
-  aus Phase 2. Die Issues tragen die entsprechenden Cross-Milestone-Kanten.
-
-Jedes Issue verweist im Body auf diesen Spec-Pfad.
+- `Depends on milestone: #1, #2`. Das `docs/workflow.md`-Token ist als
+  `Depends on milestone: #<n>` definiert; die mehrwertige Form wird dort mitgezogen
+  (Teil von Korrektur 6), statt sie stillschweigend zu dehnen.
+- **Kontext:** `crates/` enthält heute nur `core` und `audio`. `session`, `asr`,
+  `provisioning`, `cli` und `audio-win` existieren **nicht**, und `xtask` kennt nur
+  `bootstrap`/`verify`/`build` — also auch kein `wer`, auf dem `der` aufbauen könnte.
+  Jede hier zitierte Geschwister-API ist ein Versprechen; die Cross-Milestone-Kanten
+  sind bindend.
 
 ## Verification
 
-Maschinell, in Verify und in CI — **ohne Modell, ohne Netz, ohne Audiogerät**:
+Maschinell, in Verify und CI — **ohne Modell, ohne Netz, ohne Audiogerät**:
 
-- [ ] `cargo xtask verify` grün; `cargo xtask build` grün.
-- [ ] `cargo deny check` grün; alle drei Modelle stehen mit Version, SHA-256 **und
-      Lizenz** in der `provisioning`-Allowlist.
-- [ ] Der Quell- und Manifest-Audit bewacht `diarize`: kein Schreib-, kein Netz-,
-      kein `serde`-Pfad, und **kein `Serialize` auf einem Embedding-Typ**. Eine
-      absichtliche Verletzung lässt ihn einmal fehlschlagen.
-- [ ] **Null-Test:** nach dem Übergang nach `Ended` ist in den Embedding-Puffern kein
-      Wert ungleich Null mehr auffindbar.
-- [ ] **FS-Audit (aus Phase 1, erweitert):** eine vollständige Sitzung mit
-      angehängtem `diarize`-Konsumenten hinterlässt 0 neue Dateien.
-- [ ] **Clustering-Test** gegen synthetische Embeddings mit bekannter Gruppierung:
-      drei klar getrennte Sprecher werden als drei Cluster erkannt, ohne dass die
-      Sprecherzahl vorgegeben wird.
-- [ ] **Zuordnungs-Test:** bei überlappenden Sprecherbereichen bekommt ein Segment
-      das Label mit der größten Zeitüberlappung, und die Mehrdeutigkeit wird
-      vermerkt.
-- [ ] **Fan-out-Test:** `asr`- und `diarize`-Attrappen lesen denselben Ringpuffer über
-      getrennte Cursor; der langsamere meldet Verlust, ohne den schnelleren zu
-      beeinflussen — die Einlösung der Phase-1-Zusage.
-- [ ] **`Local`-Test:** der lokale Strom erhält „Ich" ohne jeden
-      Embedding-Vergleich.
+- [ ] `cargo xtask verify` und `cargo xtask build` grün; `cargo deny check` grün.
+- [ ] `cargo xtask bootstrap` verifiziert das native Archiv gegen die gepinnte
+      SHA-256; ohne `SHERPA_ONNX_ARCHIVE_DIR` bricht der Build ab, statt zu laden.
+- [ ] Der Audit bewacht `diarize`: kein Schreib-, Netz- oder `serde`-Pfad, **kein
+      `Serialize` und kein `Debug` an einem Embedding-Typ**, und die neuen Symbole
+      `sherpa_onnx::write` / `Wave::write` sind blockiert — je einmal durch eine
+      absichtliche Verletzung belegt.
+- [ ] Die `ureq`-Ausnahme für `sherpa-onnx-sys` ist **benannt** und greift nur für
+      Build-Dependencies; eine Laufzeit-`ureq`-Kante in einem bewachten Crate lässt
+      den Audit weiterhin fehlschlagen.
+- [ ] Der `provisioning`-Test prüft die Modell-Lizenz gegen eine erlaubte Menge.
+- [ ] **Null-Test:** nach `Ended` ist in keinem Embedding-Puffer ein Wert ungleich
+      Null; zusätzlich belegt ein Test, dass ein Wachstum der Sammlung den alten Block
+      **vor** der Freigabe nullt.
+- [ ] **FS-Audit (Phase 1, erweitert):** eine Sitzung mit `diarize`-Konsument
+      hinterlässt 0 neue Dateien.
+- [ ] **Clustering-Tests** gegen synthetische Embeddings: drei getrennte Sprecher →
+      drei Cluster ohne vorgegebene Zahl; **ein** Sprecher → genau `Speaker A`;
+      **null** Embeddings → leere Zuordnung, kein Fehler.
+- [ ] **Overlap-Test:** aus einem Bereich mit überlappter Sprache entsteht kein
+      Embedding; aus < 1,0 s nicht-überlappter Sprache ebenfalls nicht.
+- [ ] **Zuordnungs-Test:** das Label mit der größten Überlappung gewinnt, und
+      `overlap_ratio`/`runner_up` sind gesetzt.
+- [ ] **Fan-out-Verdrahtung:** `asr` und `diarize` laufen als **zwei reale
+      Konsumenten** am selben `Mutex`-geteilten Ringpuffer; über einen vollen Lauf
+      bleibt `loss_count` des `diarize`-Cursors bei **0**. (Der reine
+      Cursor-Mechanismus ist bereits durch Phase 1s `two_cursor_…`-Test belegt; hier
+      geht es um die Verdrahtung.)
+- [ ] **`Local`-Test:** der lokale Strom erhält „Ich" ohne Embedding-Vergleich.
 
-Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
+Manuell am Milestone-QA-Gate:
 
-- [ ] **Sprecherzuordnung:** Call mit mindestens drei Personen auf der Gegenseite →
-      am Sitzungsende tragen die Segmente unterscheidbare Labels, und der eigene
-      Beitrag ist durchgängig „Ich".
-- [ ] **DER:** `cargo xtask der` auf dem AMI-Auszug ergibt ≤ 15 %, mit
-      dokumentierter Collar- und Overlap-Konvention.
-- [ ] **60-s-Budget:** vom `stop()` bis zu feststehenden Labels vergehen ≤ 60 s,
-      gemessen und protokolliert.
-- [ ] **Nicht-Störung:** die zusätzliche Embedding-Extraktion während der Sitzung
-      lässt weder den Call noch die Live-Transkription einbrechen; der
-      `asr`-Rückstand aus Phase 2 wächst dadurch nicht.
-- [ ] **Null Bytes bleibt gültig:** nach der Sitzung findet eine prozessbezogene
-      Beobachtung keinen Schreibzugriff außerhalb der Konsole.
+- [ ] **Sprecherzuordnung:** Call mit ≥ 3 Personen auf der Gegenseite → unterscheidbare
+      Labels, eigener Beitrag durchgängig „Ich".
+- [ ] **AEC-Degradierung:** ist `is_aec_supported() == false` (Phase 1 warnt und läuft
+      weiter), wird geprüft und protokolliert, wie sich die „Ich"-Zuordnung bei
+      Lautsprecher-Nutzung verhält — das ist der Fall, in dem sie **falsch** sein kann.
+- [ ] **DER:** `cargo xtask der` auf der SDM/MDM-Spur ergibt ≤ 15 %, mit
+      dokumentierter Collar-, Overlap- und Schwellenwert-Angabe.
+- [ ] **20-s-Teilbudget:** `stop()` → feststehende Labels ≤ 20 s; ASR-Flush,
+      Clustering und Zuordnung werden **getrennt** gemessen und summiert gegen die 60 s
+      der Vision geprüft.
+- [ ] **Nicht-Störung:** weder Call noch Live-Transkription brechen ein; der
+      ASR-Rückstand wächst nicht.
+- [ ] **Prozessbezogene Beobachtung:** kein Schreibzugriff außerhalb der Konsole —
+      die einzige Prüfung, die Schreibzugriffe der **nativen** Bibliothek überhaupt
+      erfassen kann.
 
 ## Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Die DER verfehlt 15 %, weil der Cluster-Schwellenwert nicht kalibriert ist | Der Schwellenwert ist ausdrücklich ein **kalibrierter**, kein geratener Wert: die DER-Messung ist das Kalibrierwerkzeug, und ihr Ergebnis wird mit dem verwendeten Wert dokumentiert |
-| Das gewählte Embedding-Modell ist lizenzrechtlich enger als das Projekt | Genau der Gegenstand der offenen Entscheidung. Die Allowlist führt die Lizenz je Modell mit, damit die Lage später belegbar bleibt statt rekonstruiert werden zu müssen |
-| Die Embedding-Extraktion konkurriert mit der ASR-Inferenz um dieselbe Rechenzeit und reißt Phase 2s Kapazitätsungleichung | Das QA-Gate prüft ausdrücklich, dass der `asr`-Rückstand nicht wächst. Reicht es nicht, ist der Hebel die Extraktionsrate (nicht jedes VAD-Segment muss ein Embedding erzeugen), bevor an der Latenz gedreht wird |
-| Die Zusage „kein Embedding überlebt" wird als Aussage über den gesamten Prozessspeicher gelesen | Die Grenze ist offengelegt und wird in `docs/constitution.md` geschrieben, nicht nur hier: wir nullen unsere Puffer, nicht die Arenen der Inferenz-Laufzeit |
-| Der Build zieht ungeprüfte Binärarchive | Als Landmine benannt und entschieden: verifizieren oder aus den Quellen bauen. Der Preis ist Bauzeit, und der ist bewusst akzeptiert |
-| Ein Raummikrofon mit mehreren Sprechern erzeugt den Eindruck, die 100-%-Zusage sei gebrochen | Die Grenze steht in `docs/architecture.md` (Korrektur 3) und gehört in Phase 6 in die README. Sie ist eine Eigenschaft des strukturellen Ansatzes, kein Fehler |
+| Das eigene Clustering ist schlechter als eine erprobte Implementierung und reißt die DER | Agglomeratives Clustering über Kosinus-Distanz ist der Standardansatz und überschaubar; die DER-Messung ist das Kalibrier- und Beweismittel. Reißt sie, ist der nächste Hebel das Segmentierungs-Postprocessing, nicht ein FFI-Umweg, den die Constitution verbietet |
+| **Die Null-Zusage hat vier bekannte Grenzen** | (1) Realloc — behoben über feste Kapazität plus explizites Nullen alter Blöcke. (2) Die nackte `compute()`-Allokation — behoben über sofortige Überführung und Nullen. (3) Swap/Pagefile und Crash-Dumps — vom Prozess **nicht** kontrollierbar; gehört als Aussage in die README (Phase 6). (4) Die internen Arenen der ONNX-Laufzeit — nicht erreichbar. (1) und (2) sind Arbeit dieser Phase, (3) und (4) sind offengelegte Grenzen. Sie stehen hier und in der README, **nicht** als Abschwächung in der Constitution — dem `rubato`-Präzedenzfall aus Phase 1 folgend |
+| Der Phase-1-Audit blockiert `diarize` dauerhaft wegen `ureq` im Build-Graphen | Als benannte, begründete Ausnahme gelöst und maschinell auf Build-Dependencies begrenzt — nicht durch Aufweichen der Blockliste |
+| `sherpa_onnx::write` wird versehentlich benutzt | In der Blockliste, mit absichtlicher Verletzung belegt. Es ist der einzige Pfad, auf dem dieses Crate Roh-PCM schreiben könnte |
+| Die Embedding-Extraktion konkurriert mit der ASR-Inferenz | `diarize` läuft CPU-only mit begrenzter Threadzahl, die GPU bleibt der ASR. Der `loss_count`-Test ist die Schranke, nicht eine Beobachtung |
+| Der AMI-Auszug aus Phase 2 ist für DER unbrauchbar, weil er die IHM-Spur nutzt | Als Human prerequisite ausgewiesen: die DER-Messung braucht SDM/MDM **und** eine RTTM-Referenz. „Eine Quelle, zwei Kriterien" gilt für die Audioquelle, nicht für das Artefakt |
+| Die Geschwister-Milestones sind noch nicht implementiert; die hier angenommenen APIs können sich verschieben | `Depends on milestone: #1, #2` plus Cross-Milestone-Kanten je Issue. Verschiebt sich eine API, eskaliert das Issue mit `needs:planning`, statt eine Krücke zu bauen |
 
 ## Decision log
 
-- 2026-07-30: Die Rust-Bindung an sherpa-onnx geprüft. `sherpa-rs` ist seit Juni 2026
-  **archiviert**; sein Maintainer verweist auf die offiziellen Bindungen. Die Crate
-  `sherpa-onnx` (1.13.4, Apache-2.0, statisches Linken als Default) stellt genau die
-  Komponenten getrennt bereit, die unser Entwurf braucht: `VoiceActivityDetector`,
-  `SpeakerEmbeddingExtractor` über `OnlineStream` und `FastClusteringConfig` als
-  eigenen Schritt — daneben die Batch-API `OfflineSpeakerDiarization`, die wir
-  bewusst nicht verwenden. Damit ist der inkrementelle Entwurf aus `docs/prior-art.md`
-  nicht nur wünschenswert, sondern durch die API gedeckt.
-- 2026-07-30: Modell-Lizenzen geprüft. pyannote-segmentation-3.0 ist **MIT** und über
-  einen **un-gated** ONNX-Mirror verfügbar — damit entfällt der Hugging-Face-Login,
-  den das Original verlangt. Silero VAD ist **MIT**. TEN VAD ist technisch besser,
-  steht aber unter einer **modifizierten** Apache-2.0-Fassung und ist deshalb
-  abgelehnt. Für die Sprecher-Embedding-Modelle weist sherpa-onnx die Lizenzprüfung
-  ausdrücklich dem Nutzer zu, und die stärksten Kandidaten sind auf VoxCeleb
-  trainiert, dessen Terms auf Forschung beschränken — daraus die offene Entscheidung.
-- 2026-07-30: Landmine, die `cargo deny` nicht sieht: die Crate lädt beim Bauen
-  vorgefertigte Binärarchive, sofern `SHERPA_ONNX_LIB_DIR` nicht gesetzt ist.
-  Entschieden, dass der Build keine unverifizierten Binärquellen verwenden darf.
+- 2026-07-30: **Die tragende Entscheidung der ersten Fassung war falsch.** Sie stützte
+  sich auf eine Zusammenfassung der API-Dokumentation und las die **Existenz eines
+  Namens** (`FastClusteringConfig`) als Existenz einer **nutzbaren Nahtstelle**. Gegen
+  die veröffentlichte 1.13.4 geprüft: zwei öffentliche Felder, keine Methoden, einziger
+  Konsument ist `OfflineSpeakerDiarizationConfig`; es gibt keine exportierte Funktion
+  von Embeddings zu Labels, und `OfflineSpeakerDiarization::process` nimmt rohes Audio.
+  Der Entwurf der Phase war auf der gewählten Bindung nicht implementierbar. Konsequenz:
+  das Clustering schreiben wir selbst in sicherem Rust. Es ist derselbe Fehlermodus, der
+  in Phase 2 beim Versionsstand auftrat — die Lehre ist, das **veröffentlichte
+  Artefakt** zu lesen, nicht eine Beschreibung davon.
+- 2026-07-30: **Lizenz-Korrektur.** Die erste Fassung behauptete, VoxCeleb sei „auf
+  Forschung beschränkt". Das ist falsch: die Lizenz ist **CC BY 4.0** und erlaubt
+  kommerzielle Nutzung ausdrücklich; WeSpeaker führt seine VoxCeleb-Modelle wörtlich
+  darunter. Der Eindruck entsteht allein aus der Prosa der Datensatz-Startseite, die
+  „for research purposes … under a CC BY 4.0 License" schreibt und damit der Lizenz
+  widerspricht, die sie selbst nennt. Eine erfundene Lizenzsperre hätte am Gate zur
+  Wahl eines schwächeren Modells geführt, um einem Konflikt auszuweichen, den es nicht
+  gibt.
+- 2026-07-30: Zwei Wege, auf denen diese Phase die Gates der Vorphasen gebrochen hätte,
+  beide vom Review gefunden: `sherpa-onnx-sys` bringt `ureq` als Build-Dependency und
+  hätte den Phase-1-Audit an `diarize` rot gemacht; und `sherpa_onnx::write` ist eine
+  öffentliche freie Funktion, die über die C-Bibliothek eine WAV-Datei schreibt und die
+  Symbol-Blockliste der Constitution vollständig unterläuft — ein Einzeiler hätte
+  kompiliert, den Audit bestanden und Roh-PCM auf die Platte geschrieben.
+- 2026-07-30: Die Build-Entscheidung der ersten Fassung beschrieb **beide** Zweige
+  falsch — eine Prüfsummen-Konfiguration existiert nicht, und `SHERPA_ONNX_LIB_DIR`
+  baut nicht aus Quellen. Ersetzt durch `SHERPA_ONNX_ARCHIVE_DIR` plus eigenes
+  SHA-256-Gate in `bootstrap`, mit Build-Fehler statt stillem Download.
+- 2026-07-30: Weiter behoben: das 60-s-Budget war vollständig beansprucht, obwohl
+  Phase 2 den ASR-Flush darin schon reserviert hatte (jetzt 20 s Teilbudget, drei
+  Anteile getrennt gemessen); die Kapazitätsfrage hatte keinen Term und der
+  Ringpuffer keine Synchronisationsentscheidung; die Label-Zuordnung war an drei
+  Stellen widersprüchlich verortet (jetzt eindeutig in `session`); und die Grenze der
+  „Ich"-Zusage nannte das Raummikrofon, aber nicht den Fall, in dem Phase 1 ohne
+  Echokompensation weiterläuft und die Zuordnung dadurch nicht gröber, sondern
+  **falsch** wird.
