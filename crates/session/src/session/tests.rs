@@ -3,12 +3,17 @@
 
 use super::Session;
 use crate::plan::CapturePlan;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime};
 use transcriber_audio::{
-    AudioSource, AudioSourceError, AudioSourceEvent, SourceFactory, StreamFormat, TestToneSources,
+    AudioSource, AudioSourceError, AudioSourceEvent, SourceFactory, StreamFormat, TestToneSource,
+    TestToneSources,
 };
-use transcriber_core::{AttestationVersion, ConsentAttestation, SessionState, StreamIdentity};
+use transcriber_core::{
+    AttestationVersion, CaptureSubject, ConsentAttestation, SessionState, StreamIdentity,
+};
 
 fn consent() -> ConsentAttestation {
     ConsentAttestation::new(SystemTime::now(), AttestationVersion::V1)
@@ -159,5 +164,99 @@ fn request_stop_still_stops_local_even_when_remote_panics() {
         elapsed_right_after_stop, elapsed_later,
         "local's capture thread must already be stopped once request_stop returns, \
              even though remote panicked"
+    );
+}
+
+/// A `Remote` source whose every `pull` blocks for a measurable time before
+/// returning `Idle` — stands in for a real backend's event-wait timeout, so
+/// joining its capture thread takes a non-instant amount of time. Used
+/// below to prove `Drop for Session` signals `local` to stop *before*
+/// blocking on `remote`'s join, not after.
+struct SlowRemote(StreamFormat);
+
+impl AudioSource for SlowRemote {
+    fn identity(&self) -> StreamIdentity {
+        StreamIdentity::Remote
+    }
+
+    fn format(&self) -> StreamFormat {
+        self.0
+    }
+
+    fn pull(&mut self, _timeout: Duration) -> Result<AudioSourceEvent, AudioSourceError> {
+        thread::sleep(Duration::from_millis(250));
+        Ok(AudioSourceEvent::Idle)
+    }
+}
+
+/// A `Local` source that counts every `pull` call into a shared counter —
+/// the observable stand-in for "is this stream's capture thread still
+/// running".
+struct CountingLocal {
+    inner: TestToneSource,
+    pulls: Arc<AtomicU64>,
+}
+
+impl AudioSource for CountingLocal {
+    fn identity(&self) -> StreamIdentity {
+        StreamIdentity::Local
+    }
+
+    fn format(&self) -> StreamFormat {
+        self.inner.format()
+    }
+
+    fn pull(&mut self, timeout: Duration) -> Result<AudioSourceEvent, AudioSourceError> {
+        self.pulls.fetch_add(1, Ordering::Relaxed);
+        self.inner.pull(timeout)
+    }
+}
+
+/// Regression test: dropping a `Session` without an explicit `stop()` must
+/// signal *every* stream before joining *any* of them — the same ordering
+/// bug `request_stop` was fixed for above, reintroduced at the abandon path
+/// by Rust's field-by-field drop order (`remote` declared before `local`
+/// in the struct): without `Drop for Session`, `remote`'s own
+/// `StreamCapture::drop` would signal *and block joining* before `local`'s
+/// stop flag was ever touched, during which `local` keeps capturing live
+/// PCM.
+///
+/// `remote` here blocks for 250 ms per `pull` (`SlowRemote`), so joining it
+/// takes a measurable amount of time; `local` is unbounded and counts its
+/// own pulls. If `local`'s stop flag were set only after `remote`'s join
+/// completed, its count would climb by thousands during that window
+/// (`TestToneSource` never blocks on `pull`); with both signalled up
+/// front, it climbs by only the handful of calls already in flight.
+#[test]
+fn dropping_a_session_signals_every_stream_before_joining_any() {
+    let Ok(format) = StreamFormat::new(48_000, 2) else {
+        panic!("48 kHz stereo is always valid");
+    };
+    let subject = CaptureSubject::new("test", 1, SystemTime::now());
+    let remote: Box<dyn AudioSource> = Box::new(SlowRemote(format));
+    let pulls = Arc::new(AtomicU64::new(0));
+    let local: Box<dyn AudioSource> = Box::new(CountingLocal {
+        inner: TestToneSource::new(StreamIdentity::Local, format, 660.0),
+        pulls: Arc::clone(&pulls),
+    });
+    let plan = CapturePlan::new(subject, remote, Some(local));
+
+    let Ok(session) = Session::start(consent(), plan) else {
+        panic!("a consented start with valid sources must succeed");
+    };
+
+    while pulls.load(Ordering::Relaxed) == 0 {
+        thread::yield_now();
+    }
+    let before = pulls.load(Ordering::Relaxed);
+
+    drop(session);
+
+    let after = pulls.load(Ordering::Relaxed);
+    assert!(
+        after - before <= 200,
+        "local kept pulling ({} more calls) while remote's blocking drop ran: \
+         its stop flag was not set before remote was joined",
+        after - before
     );
 }

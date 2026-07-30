@@ -969,3 +969,25 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     jedem späteren Erwerb durch einen Leser), nicht nur eine meist
     zutreffende Reihenfolge. Belegt durch 30 wiederholte Läufe des zuvor
     flackernden Tests ohne einen weiteren Fehlschlag.
+- 2026-07-30: Eine dritte Review-Runde (frischer Agent, Opus) bestätigte
+  alle drei Korrekturen der zweiten Runde per Falsifikation (jeweils
+  zurückgesetzt, Fehlschlag reproduziert, wieder hergestellt — u. a. 240
+  Läufe des Ringpuffer-Race-Tests unter 16-facher Parallelität, 5 Treffer
+  ohne die Korrektur, 0 mit ihr), fand aber eine echte Lücke: `impl Drop
+  for Session` hatte **keinen eigenen** Regressionstest — mit leerem
+  `drop`-Rumpf blieb die gesamte Suite grün, weil Rounds 1s Test
+  (`capture::tests::dropping_without_stop_...`) nur `StreamCapture` prüft,
+  nicht die `Session`-Ebene, auf der Round 2s Fund saß. Genau die
+  Lücke, durch die der Fund selbst erst entstand — unbeobachtet bliebe er
+  bei einem künftigen „Aufräumen, `StreamCapture` droppt sich doch schon
+  selbst"-Commit wieder. Behoben durch
+  `session::tests::dropping_a_session_signals_every_stream_before_joining_any`:
+  ein `Remote`, dessen `pull` 250 ms blockiert (`SlowRemote`), und ein
+  `Local`, das seine `pull`-Aufrufe zählt (`CountingLocal`) — fällt
+  `local`s Stop-Signal erst nach `remote`s blockierendem Join, klettert der
+  Zähler während der 250 ms um Tausende (per Falsifikation belegt: 4455–4976
+  bei leerem `drop`-Rumpf über drei Läufe), mit der Korrektur um 0. Dazu
+  eine kleine Ungenauigkeit in einem Kommentar in `capture.rs` korrigiert
+  (die Happens-before-Kette bezieht sich auf die *Freigabe*, nicht den
+  *Erwerb*, von `position`, und gilt nur, solange ein Leser dieselbe
+  Reihenfolge einhält — jetzt so benannt).

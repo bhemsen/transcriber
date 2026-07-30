@@ -195,8 +195,14 @@ fn capture_loop(
                 // missing. The two locks make this a real happens-before
                 // guarantee, not just an ordering that is usually true —
                 // `ring`'s unlock here is sequenced-before `position`'s
-                // lock below, which synchronizes-with any later reader
-                // that locks `position` and then locks `ring` in turn.
+                // unlock below (same thread), and that unlock (release)
+                // synchronizes-with a later reader's `position` lock
+                // (acquire); by transitivity the ring push happens-before
+                // that reader's own subsequent `ring` lock, *provided* the
+                // reader locks `position` before `ring`, matching this
+                // order (as every reader here does — see `elapsed()` then
+                // `all_zero()` in the tests below). A future reader that
+                // inverted that order would lose the guarantee.
                 match ring.lock() {
                     Ok(mut ring) => ring.push(frame),
                     Err(_) => {
