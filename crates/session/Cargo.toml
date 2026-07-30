@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["sync"] }
+zeroize = "1"
 transcriber-core = { path = "../core" }
 transcriber-audio = { path = "../audio" }
 

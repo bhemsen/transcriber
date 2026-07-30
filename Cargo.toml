@@ -5,6 +5,7 @@ members = [
     "crates/audio",
     "crates/audio-win",
     "crates/session",
+    "crates/cli",
     "xtask",
 ]
 
