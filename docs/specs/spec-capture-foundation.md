@@ -606,3 +606,57 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     existiert) und die Erkennung von `[target.'cfg(...)'.dependencies]` in
     der Manifest-Schicht (relevant erst mit `audio-win`, dokumentiert als
     offene Lücke im Doc-Kommentar von `parse_direct_dependencies`).
+- 2026-07-30: Issue #7 (`AudioSource`/`SourceFactory`-Traits und die
+  synthetische Testton-Quelle) legt die Trait-Form fest, an der #9, #11–#13
+  und #14 nicht mehr rütteln sollen:
+  - `AudioSource: Send` mit genau drei Methoden: `identity() -> StreamIdentity`,
+    `format() -> StreamFormat`, `pull(timeout: Duration) ->
+    Result<AudioSourceEvent, AudioSourceError>` und einer vierten mit
+    Default-Implementierung, `degradation() -> Option<SourceDegradation>`
+    (Default `None`). `AudioSourceEvent` ist `Frame(Frame) | Idle | Ended` —
+    die drei Zustände, die der Windows-Backend-Teil dieser Spec bereits
+    festlegt (Event-Timeout, `get_next_packet_size() -> None` → `Idle`;
+    Lesefehler auf dem Loopback-Client, invalidiertes Gerät → `Ended`), sodass
+    `AudioSourceError` nur noch für einen wirklich unklassifizierten Fehler
+    übrigbleibt. `Send` als Supertrait genügt, damit `Box<dyn AudioSource>`
+    ohne weitere Annotation auf einen eigenen Capture-Thread wandert — belegt
+    durch einen Test, der eine Instanz per `thread::spawn` verschiebt und
+    `pull` dort aufruft, statt die Annahme nur zu behaupten.
+  - `SourceDegradation` trägt bewusst nur `EchoCancellationUnavailable` und
+    keinen Windows-Bezug im Namen oder Kommentar — die Fähigkeitsprobe
+    `is_aec_supported()` ist `audio-win`s Sache, dieser Typ ist nur das
+    plattformfreie Vokabular, über das eine Quelle das Ergebnis meldet.
+  - `SourceFactory` (kein `Send`-Supertrait — nur die geöffneten `AudioSource`s
+    wandern auf einen Capture-Thread, die Fabrik selbst nicht) mit
+    `list_subjects()`, `open_remote(&CaptureSubject) ->
+    Result<Box<dyn AudioSource>, SourceFactoryError>` und
+    `open_local() -> Result<Option<Box<dyn AudioSource>>, SourceFactoryError>`.
+    Ein fehlendes Mikrofon ist `Ok(None)`; `SourceFactoryError::Open{identity,
+    reason}` ist für einen echten Fehler reserviert — auch für den Fall, dass
+    `audio-win`s Identitätsprüfung zwischen `list-sources` und `capture` eine
+    seit der Auflistung veränderte Prozessidentität entdeckt (eine recycelte
+    PID) und deshalb bewusst laut scheitern muss statt eine falsche Anwendung
+    zu öffnen.
+  - `TestToneSource` synthetisiert einen Sinus aus einem Phasenakkumulator,
+    der über `pull`-Aufrufe hinweg weiterläuft (kein Klicken an
+    Chunk-Grenzen), in Chunks von 480 Frames (10 ms bei 48 kHz — dieselbe
+    Paketgröße, die `get_next_packet_size()` auf dem echten Loopback-Client
+    liefert) und mit `with_total_frames(...)` optional auf ein festes Budget
+    begrenzt, damit ein Test `Ended` deterministisch erreichen kann, ohne dass
+    ein Gerät das Stromende signalisiert. `TestToneSources` vergibt dem
+    `Remote`- und dem `Local`-Strom unterschiedliche Frequenzen (440/660 Hz),
+    damit ein künftiger Zwei-Strom-Sitzungstest (Issue #9) sie allein am Ton
+    unterscheiden kann, und `without_microphone()` lässt `open_local()`
+    `Ok(None)` liefern, um den "fehlendes Mikrofon"-Vertrag ohne echtes Gerät
+    zu prüfen.
+  - `audio` bekommt mit diesem Issue seine erste interne Pfad-Abhängigkeit
+    (`transcriber-core`, für `CaptureSubject`/`StreamIdentity`) — im Einklang
+    mit der Abhängigkeitsrichtung `core ← audio` aus `docs/architecture.md`.
+    `cargo deny check`s `wildcards = "deny"`-Regel verlangt dafür eine
+    explizite `version`-Angabe neben `path`, sonst gilt die Pfad-Abhängigkeit
+    selbst als Wildcard-Fund.
+  - Zurückgestellt, nicht Teil dieses Issues: eine explizite `stop()`/`close()`-
+    Methode auf `AudioSource`. Rust-Ownership plus `Drop` auf der konkreten
+    Backend-Implementierung genügt, um eine Ressource beim Fallenlassen
+    freizugeben; eine zusätzliche Trait-Methode dafür hätte nur Fläche ohne
+    einen Fall, den die Downstream-Issues bereits brauchen.

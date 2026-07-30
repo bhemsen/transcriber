@@ -7,17 +7,25 @@
 //! a buffer whose capacity never changes for the lifetime of the stream.
 //!
 //! Also here: downmix and resampling to 16 kHz mono on the read side (see
-//! [`StreamResampler`]). Deliberately **not** here yet: the `AudioSource` /
-//! `SourceFactory` traits and the synthetic test-tone source — those land in
-//! a later issue of the same phase and depend on the types this crate
-//! exports — see `docs/specs/spec-capture-foundation.md`.
+//! [`StreamResampler`]); the `AudioSource` / `SourceFactory` traits every
+//! platform backend opens its streams through, so `session` never sees a
+//! concrete backend type; and [`TestToneSource`] / [`TestToneSources`], the
+//! synthetic debug path `docs/constitution.md` requires and the only way
+//! anything in this phase runs on a CI runner with no audio device — see
+//! `docs/specs/spec-capture-foundation.md`.
 
+mod factory;
 mod format;
 mod frame;
 mod resample;
 mod ring_buffer;
+mod source;
+mod test_tone;
 
+pub use factory::{SourceFactory, SourceFactoryError};
 pub use format::{FormatError, StreamFormat};
 pub use frame::{DeviceTimestamp, Frame, GapCause};
 pub use resample::{ResampleError, StreamResampler, TARGET_SAMPLE_RATE_HZ};
 pub use ring_buffer::{RING_BUFFER_CAPACITY_SECONDS, ReaderId, RingBuffer};
+pub use source::{AudioSource, AudioSourceError, AudioSourceEvent, SourceDegradation};
+pub use test_tone::{TestToneSource, TestToneSources};

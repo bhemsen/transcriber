@@ -1,6 +1,6 @@
 [package]
 name = "transcriber-audio"
-description = "PCM frame and format types, the fixed-size per-stream ring buffer, and read-side downmix/resampling to 16 kHz mono. No I/O, no HTTP client."
+description = "AudioSource/SourceFactory traits, PCM frame and format types, the fixed-size per-stream ring buffer, read-side downmix/resampling to 16 kHz mono, and the synthetic test-tone source. No I/O, no HTTP client."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,7 @@ repository.workspace = true
 rubato = "0.15"
 thiserror = "2"
 zeroize = "1"
+transcriber-core = { path = "../core", version = "0.1.0" }
 
 [lints]
 workspace = true

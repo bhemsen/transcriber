@@ -11,7 +11,7 @@ Cargo-Workspace, Crates unter `crates/`, Namensschema `transcriber-<concern>`.
 | Component | Responsibility |
 | --------- | -------------- |
 | `core` | Domänentypen: `SessionState`, `SessionId`, `ConsentAttestation`, `TranscriptSegment`, `SpeakerLabel`, `StreamIdentity` (`Local` / `Remote`), Zeitachse, Fehlertypen. Kein I/O, keine Plattform-Abhängigkeiten, `thiserror` erlaubt (ab Phase 3 zusätzlich `zeroize`) |
-| `audio` | `AudioSource`-Trait, PCM-Frame-Typen, fest dimensionierter Ringpuffer, Resampling auf 16 kHz mono |
+| `audio` | `AudioSource`- und `SourceFactory`-Trait, PCM-Frame-Typen, fest dimensionierter Ringpuffer, Resampling auf 16 kHz mono, synthetische Testton-Quelle (`TestToneSource`/`TestToneSources`) |
 | `audio-win` | WASAPI Process Loopback und Mikrofon-Capture, Prozessbaum-Enumeration. Das einzige Crate, das die `unsafe`-Ausnahme ziehen darf, wenn ein konkreter Fall sie erzwingt |
 | `asr` | `SpeechToText`-Trait und whisper-rs-Implementierung, Fenster-Scheduling für den Live-Strom, GPU-/CPU-Ladder |
 | `diarize` | VAD, overlap-aware Segmentierung, inkrementelle Embedding-Extraktion, globales Clustering am Sitzungsende (sherpa-onnx) |
