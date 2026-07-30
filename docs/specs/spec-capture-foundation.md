@@ -463,12 +463,23 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   - `rubato::FftFixedInOut` statt eines `Sinc*`-Resamplers: bei 48 kHz → 16 kHz
     ist das Verhältnis exakt 3:1, genau der Fall, für den dieser Resampler-Typ
     gebaut ist. Sein Anti-Alias-Cutoff wird aus `fft_size_in`/`fft_size_out`
-    automatisch auf die Ziel-Nyquist-Frequenz (8 kHz) gelegt — ohne dass eigene
-    Sinc-Parameter (`f_cutoff`, `sinc_len`, Fenster) von Hand kalibriert werden
-    müssen, was die Fehlerfläche für ein falsch konfiguriertes Filter auf null
-    reduziert. Eingabe-Chunk-Größe: 480 Frames (10 ms bei 48 kHz, glatt durch 3
-    teilbar), macht `output_delay()` und die Chunk-Arithmetik exakt statt
-    gerundet.
+    automatisch knapp **unterhalb** der Ziel-Nyquist-Frequenz gelegt (bei
+    16 kHz Ziel real bei rund 7,3 kHz, nicht erst bei 8 kHz — `rubato`s
+    `BlackmanHarris2`-Fenster liegt bewusst auf der sicheren Seite) — ohne
+    dass eigene Sinc-Parameter (`f_cutoff`, `sinc_len`, Fenster) von Hand
+    kalibriert werden müssen, was die Fehlerfläche für ein falsch
+    konfiguriertes Filter auf null reduziert. Eingabe-Chunk-Größe: als
+    **Wunschgröße** 480 Frames (10 ms bei 48 kHz) an `FftFixedInOut::new`
+    übergeben, aber `StreamResampler` liest die tatsächliche Chunk-Größe über
+    `input_frames_next()`/`output_frames_next()` zurück, statt die
+    Wunschgröße weiterzuverwenden — bei 48 kHz → 16 kHz (3:1) bleibt sie
+    unverändert bei 480/160, bei anderen Raten (z. B. 44,1 kHz, wo `rubato`
+    auf 882 Frames aufrundet) nicht. Ein erster Entwurf verwendete die
+    Wunschgröße direkt weiter; das Review vor dem Merge deckte auf, dass das
+    für jede Rate außer 48 kHz **jeden** `process_into_buffer`-Aufruf
+    fehlschlagen ließ und über den Fehlerpfad in `resample_one_chunk` die
+    gesamte Audiospur lautlos verwarf. Ein Regressionstest gegen 44,1 kHz
+    belegt die Korrektur.
   - Der Resampler-Zustand (der FFT-Overlap-Tail, das Downmix-Restsample unter
     einem vollen Frame, die noch nicht abgeholten resampelten Samples) liegt
     vollständig in `StreamResampler`, gebunden an genau einen `ReaderId` bei

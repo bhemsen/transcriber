@@ -8,10 +8,11 @@
 //! cannot introduce frequency content the source did not already carry, and
 //! it roughly halves the sample count the resampler has to filter. The
 //! anti-aliasing itself is `rubato`'s job — [`FftFixedInOut`] places its
-//! low-pass cutoff at the target's Nyquist frequency (8 kHz for a 16 kHz
-//! target), computed from the exact input/output FFT sizes rather than left
-//! for the caller to tune. Record of this choice: spec Decision log,
-//! 2026-07-30.
+//! low-pass cutoff just below the target's Nyquist frequency (8 kHz for a
+//! 16 kHz target; `rubato`'s `BlackmanHarris2` window puts the actual -3 dB
+//! point a little under that, never above it), computed from the exact
+//! input/output FFT sizes rather than left for the caller to tune. Record of
+//! this choice: spec Decision log, 2026-07-30.
 
 use rubato::{FftFixedInOut, Resampler as _, ResamplerConstructionError};
 use thiserror::Error;
@@ -22,10 +23,14 @@ use crate::ring_buffer::{ReaderId, RingBuffer};
 /// Fixed output rate every [`StreamResampler`] converts to.
 pub const TARGET_SAMPLE_RATE_HZ: u32 = 16_000;
 
-/// Native-format mono frames pulled from the ring buffer per resample step —
-/// 10 ms at 48 kHz. Divisible by the 48 kHz -> 16 kHz ratio (3), so the
-/// configured [`FftFixedInOut`] needs no internal rounding for that pair.
-const CHUNK_FRAMES_IN: usize = 480;
+/// Desired native-format mono frames per resample step — 10 ms at 48 kHz,
+/// handed to [`FftFixedInOut::new`] as a hint. `rubato` rounds this up to a
+/// multiple of `source_hz / gcd(source_hz, TARGET_SAMPLE_RATE_HZ)`; for the
+/// 48 kHz -> 16 kHz pair (ratio exactly 3:1) that rounding is a no-op, but
+/// [`StreamResampler`] never assumes so — it always reads the resampler's
+/// *actual* chunk size back via `input_frames_next()` rather than reusing
+/// this constant, so every source rate stays correct, not just this one.
+const CHUNK_FRAMES_IN_HINT: usize = 480;
 
 /// Failure constructing a [`StreamResampler`] for a source format.
 #[derive(Debug, Error)]
@@ -51,9 +56,15 @@ pub enum ResampleError {
 /// buffer each own their own `StreamResampler` — the FFT overlap tail and
 /// buffered partial frames of a lagging reader never touch another reader's
 /// state, which is what makes the phase 2/3 fan-out purely additive.
+///
+/// Deliberately has no `Debug` impl, for the same reason as [`RingBuffer`]:
+/// every field that would be worth printing either holds PCM directly
+/// (`raw_scratch`, `raw_leftover`, `mono_pending`, `output_ready`) or is
+/// `rubato`'s own PCM-holding internal state.
 pub struct StreamResampler {
     reader: ReaderId,
     channels: usize,
+    chunk_frames_in: usize,
     raw_scratch: Vec<f32>,
     raw_leftover: Vec<f32>,
     mono_pending: Vec<f32>,
@@ -72,7 +83,7 @@ impl StreamResampler {
         let resampler = FftFixedInOut::<f32>::new(
             source_format.sample_rate_hz() as usize,
             TARGET_SAMPLE_RATE_HZ as usize,
-            CHUNK_FRAMES_IN,
+            CHUNK_FRAMES_IN_HINT,
             1,
         )
         .map_err(|source| ResampleError::Construction {
@@ -80,11 +91,17 @@ impl StreamResampler {
             target_hz: TARGET_SAMPLE_RATE_HZ,
             source,
         })?;
+        // Read the resampler's *actual* chunk sizes back rather than reusing
+        // the hint: rubato rounds a hint up to a multiple that keeps the
+        // ratio exact, and for most source rates that is not the hint
+        // itself (only e.g. 48 kHz's 3:1 ratio leaves it unchanged).
+        let chunk_frames_in = resampler.input_frames_next();
         let chunk_frames_out = resampler.output_frames_next();
         Ok(Self {
             reader,
             channels,
-            raw_scratch: vec![0.0; CHUNK_FRAMES_IN * channels],
+            chunk_frames_in,
+            raw_scratch: vec![0.0; chunk_frames_in * channels],
             raw_leftover: Vec::new(),
             mono_pending: Vec::new(),
             output_ready: Vec::new(),
@@ -124,7 +141,7 @@ impl StreamResampler {
     /// been downmixed, then resamples it into `output_ready`. Returns
     /// whether a chunk was produced; `false` means `ring` had nothing left.
     fn fill_pending_and_resample(&mut self, ring: &mut RingBuffer) -> bool {
-        while self.mono_pending.len() < CHUNK_FRAMES_IN {
+        while self.mono_pending.len() < self.chunk_frames_in {
             let read = ring.read(self.reader, &mut self.raw_scratch);
             if read == 0 {
                 return false;
@@ -151,22 +168,30 @@ impl StreamResampler {
         self.raw_leftover = combined[complete_len..].to_vec();
     }
 
-    /// Feeds exactly [`CHUNK_FRAMES_IN`] pending mono samples through
+    /// Feeds exactly `chunk_frames_in` pending mono samples through
     /// `rubato`, appending the result to `output_ready`.
     fn resample_one_chunk(&mut self) {
         if self.output_cursor > 0 {
             self.output_ready.drain(..self.output_cursor);
             self.output_cursor = 0;
         }
-        let chunk: Vec<f32> = self.mono_pending.drain(..CHUNK_FRAMES_IN).collect();
+        let chunk: Vec<f32> = self.mono_pending.drain(..self.chunk_frames_in).collect();
         let input = [chunk];
         let mut output = [vec![0.0_f32; self.chunk_frames_out]];
         let result = self
             .resampler
             .process_into_buffer(&input, &mut output, None);
+        // `chunk.len() == chunk_frames_in == input_frames_next()`,
+        // `output[0].len() == chunk_frames_out == output_frames_next()`, and
+        // there is exactly one channel on both sides — the only inputs
+        // `process_into_buffer` validates — so this cannot fail for any
+        // `source_format` `new()` accepted. If it ever does, dropping the
+        // chunk (rather than panicking on the audio read path) is the
+        // deliberately chosen failure mode; `debug_assert!` still surfaces
+        // it during development.
         debug_assert!(
             result.is_ok(),
-            "input/output chunk sizes are fixed by construction and must match"
+            "chunk_frames_in/out are read back from the resampler itself and must match"
         );
         if let Ok((_, produced)) = result {
             self.output_ready.extend_from_slice(&output[0][..produced]);
@@ -178,7 +203,7 @@ impl StreamResampler {
 mod tests {
     use std::f32::consts::PI;
 
-    use super::{CHUNK_FRAMES_IN, StreamResampler, TARGET_SAMPLE_RATE_HZ};
+    use super::{CHUNK_FRAMES_IN_HINT, StreamResampler, TARGET_SAMPLE_RATE_HZ};
     use crate::format::StreamFormat;
     use crate::frame::{DeviceTimestamp, Frame};
     use crate::ring_buffer::RingBuffer;
@@ -193,17 +218,23 @@ mod tests {
     }
 
     /// Builds `frame_count` stereo frames of a full-scale sine at
-    /// `frequency_hz`, identical on both channels so downmixing to mono
-    /// leaves the tone's amplitude unchanged.
-    fn stereo_sine(frequency_hz: f32, frame_count: usize) -> Vec<f32> {
+    /// `frequency_hz` and `sample_rate_hz`, identical on both channels so
+    /// downmixing to mono leaves the tone's amplitude unchanged.
+    fn stereo_sine_at(frequency_hz: f32, sample_rate_hz: u32, frame_count: usize) -> Vec<f32> {
         let mut samples = Vec::with_capacity(frame_count * 2);
         for n in 0..frame_count {
-            let phase = 2.0 * PI * frequency_hz * (n as f32) / SOURCE_SAMPLE_RATE_HZ as f32;
+            let phase = 2.0 * PI * frequency_hz * (n as f32) / sample_rate_hz as f32;
             let value = phase.sin();
             samples.push(value);
             samples.push(value);
         }
         samples
+    }
+
+    /// [`stereo_sine_at`] at the fixed [`SOURCE_SAMPLE_RATE_HZ`] every test
+    /// but the non-48-kHz regression test below uses.
+    fn stereo_sine(frequency_hz: f32, frame_count: usize) -> Vec<f32> {
+        stereo_sine_at(frequency_hz, SOURCE_SAMPLE_RATE_HZ, frame_count)
     }
 
     /// Magnitude of a single-frequency Goertzel filter evaluated over
@@ -247,7 +278,7 @@ mod tests {
 
     #[test]
     fn frequency_is_preserved_and_output_length_is_exact() {
-        let frame_count = CHUNK_FRAMES_IN * 100; // 48_000 frames = 1 s exactly
+        let frame_count = CHUNK_FRAMES_IN_HINT * 100; // 48_000 frames = 1 s exactly
         let input = stereo_sine(1_000.0, frame_count);
         let output = resample_all(input);
 
@@ -274,7 +305,7 @@ mod tests {
     /// decimation instead of `rubato`'s filtered resampling.
     #[test]
     fn content_above_the_new_nyquist_is_filtered_not_aliased() {
-        let frame_count = CHUNK_FRAMES_IN * 100;
+        let frame_count = CHUNK_FRAMES_IN_HINT * 100;
         let tone_hz = 9_000.0;
         let alias_hz = 7_000.0;
         let input = stereo_sine(tone_hz, frame_count);
@@ -306,7 +337,7 @@ mod tests {
     /// other's.
     #[test]
     fn two_readers_at_different_paces_resample_identically() {
-        let frame_count = CHUNK_FRAMES_IN * 6;
+        let frame_count = CHUNK_FRAMES_IN_HINT * 6;
         let input = stereo_sine(1_000.0, frame_count);
 
         let mut ring = RingBuffer::new(source_format());
@@ -336,5 +367,99 @@ mod tests {
 
         assert_eq!(fast_output.len(), slow_output.len());
         assert_eq!(fast_output, slow_output);
+    }
+
+    /// Exercises the `raw_leftover` path directly: pushing five raw samples
+    /// at a time (never a multiple of the two channels) forces
+    /// `RingBuffer::read` to keep handing back partial frames, so
+    /// `downmix`'s leftover carry-over runs on almost every call instead of
+    /// only once at the very end of a stream.
+    #[test]
+    fn partial_frames_split_across_pushes_are_carried_over_correctly() {
+        let frame_count = CHUNK_FRAMES_IN_HINT * 2;
+        let input = stereo_sine(1_000.0, frame_count);
+
+        let mut ring = RingBuffer::new(source_format());
+        let reader = ring.add_reader();
+        let Ok(mut resampler) = StreamResampler::new(reader, source_format()) else {
+            panic!("48 kHz stereo -> 16 kHz mono must construct");
+        };
+
+        let mut output = Vec::new();
+        let mut scratch = [0.0_f32; 160];
+        for piece in input.chunks(5) {
+            ring.push(Frame::samples(
+                DeviceTimestamp::from_ticks(0),
+                piece.to_vec(),
+            ));
+            let read = resampler.read(&mut ring, &mut scratch);
+            output.extend_from_slice(&scratch[..read]);
+        }
+
+        let expected_len = frame_count / 3;
+        assert_eq!(
+            output.len(),
+            expected_len,
+            "a push pattern that never aligns to a stereo frame must not change the resampled length"
+        );
+        let at_tone = goertzel_magnitude(&output, TARGET_SAMPLE_RATE_HZ as f32, 1_000.0);
+        let at_other = goertzel_magnitude(&output, TARGET_SAMPLE_RATE_HZ as f32, 5_000.0);
+        assert!(
+            at_tone > at_other * 10.0,
+            "the tone must survive a constantly misaligned push pattern: {at_tone} vs {at_other}"
+        );
+    }
+
+    /// The regression test for the bug the review caught: `StreamResampler`
+    /// used to always read exactly [`CHUNK_FRAMES_IN_HINT`] native frames
+    /// per step, which only happens to match `rubato`'s actual
+    /// `input_frames_next()` for 48 kHz -> 16 kHz (ratio exactly 3:1). For a
+    /// rate like 44.1 kHz, `rubato` rounds up to 882-frame chunks; feeding it
+    /// 480 at a time made every `process_into_buffer` call fail and, via the
+    /// `debug_assert!`-guarded `if let Ok(..)` in `resample_one_chunk`,
+    /// silently discarded 100% of the audio in release builds while
+    /// panicking in debug/test builds. `StreamResampler::new` now reads
+    /// `input_frames_next()` back instead of assuming the hint, so this must
+    /// produce real, non-empty, correctly-pitched output.
+    #[test]
+    fn a_non_48_khz_source_rate_still_resamples_correctly() {
+        let source_hz = 44_100;
+        let Ok(format) = StreamFormat::new(source_hz, 2) else {
+            panic!("44.1 kHz stereo must be a valid format");
+        };
+        let mut ring = RingBuffer::new(format);
+        let reader = ring.add_reader();
+        let Ok(mut resampler) = StreamResampler::new(reader, format) else {
+            panic!("44.1 kHz stereo -> 16 kHz mono must construct");
+        };
+
+        let frame_count = source_hz as usize * 2; // 2 s
+        let input = stereo_sine_at(1_000.0, source_hz, frame_count);
+        ring.push(Frame::samples(DeviceTimestamp::from_ticks(0), input));
+
+        let mut output = Vec::new();
+        let mut scratch = [0.0_f32; 512];
+        loop {
+            let read = resampler.read(&mut ring, &mut scratch);
+            output.extend_from_slice(&scratch[..read]);
+            if read == 0 {
+                break;
+            }
+        }
+
+        let expected_approx =
+            (frame_count as f32 * TARGET_SAMPLE_RATE_HZ as f32 / source_hz as f32) as usize;
+        assert!(
+            output.len() > expected_approx / 2,
+            "44.1 kHz input must not be silently discarded: got {} samples, expected roughly {expected_approx}",
+            output.len()
+        );
+
+        let at_tone = goertzel_magnitude(&output, TARGET_SAMPLE_RATE_HZ as f32, 1_000.0);
+        let at_other = goertzel_magnitude(&output, TARGET_SAMPLE_RATE_HZ as f32, 5_000.0);
+        assert!(
+            at_tone > at_other * 10.0,
+            "the 1 kHz tone must survive a non-48 kHz source rate: {at_tone} vs {at_other}"
+        );
     }
 }

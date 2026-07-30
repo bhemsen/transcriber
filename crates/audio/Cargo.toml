@@ -1,6 +1,6 @@
 [package]
 name = "transcriber-audio"
-description = "PCM frame and format types, and the fixed-size per-stream ring buffer. No I/O, no HTTP client."
+description = "PCM frame and format types, the fixed-size per-stream ring buffer, and read-side downmix/resampling to 16 kHz mono. No I/O, no HTTP client."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
