@@ -76,8 +76,9 @@ issues are English.
 
 ## Development
 
-Prerequisites on Windows: the Rust MSVC toolchain, CMake, and the Visual Studio C++
-Build Tools — `whisper.cpp` and `sherpa-onnx` are built from source.
+Prerequisites on Windows: the Rust MSVC toolchain. From phase 2 on, also CMake
+and the Visual Studio C++ Build Tools, once `whisper.cpp` and `sherpa-onnx` are
+built from source.
 
 ```sh
 cargo xtask bootstrap   # make a fresh checkout runnable
