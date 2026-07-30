@@ -35,9 +35,11 @@ mod error;
 mod event;
 mod plan;
 mod session;
+mod stats;
 
 pub use error::SessionError;
 pub use event::SessionEvent;
 pub use plan::CapturePlan;
 pub use session::Session;
+pub use stats::StreamStats;
 pub use transcriber_core::SessionState;

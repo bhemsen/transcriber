@@ -98,6 +98,37 @@ fn a_missing_microphone_warns_instead_of_aborting() {
     assert!(session.local_degradation().is_none());
 }
 
+#[test]
+fn stream_stats_reports_real_captured_audio_for_both_streams() {
+    let factory = bounded_factory();
+    let mut session = started_session(&factory);
+
+    let Ok(()) = session.stop() else {
+        panic!("stop must succeed from Capturing");
+    };
+
+    let Some(remote_stats) = session.stream_stats(StreamIdentity::Remote) else {
+        panic!("Remote always has a stream");
+    };
+    assert_eq!(remote_stats.frame_count, 480);
+    assert_eq!(remote_stats.loss_count, 0);
+    assert_eq!(remote_stats.gap_count, 0);
+
+    let Some(local_stats) = session.stream_stats(StreamIdentity::Local) else {
+        panic!("this factory always opens a Local stream too");
+    };
+    assert_eq!(local_stats.frame_count, 480);
+}
+
+#[test]
+fn stream_stats_is_none_for_local_without_a_microphone() {
+    let factory = bounded_factory().without_microphone();
+    let session = started_session(&factory);
+
+    assert!(session.stream_stats(StreamIdentity::Local).is_none());
+    assert!(session.stream_stats(StreamIdentity::Remote).is_some());
+}
+
 /// Regression test: `Session::start` can already publish
 /// [`SessionEvent::MicrophoneUnavailable`] before it returns — before any
 /// caller could possibly have called [`Session::subscribe`] yet.

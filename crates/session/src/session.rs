@@ -14,6 +14,7 @@ use crate::clock::SessionZero;
 use crate::error::SessionError;
 use crate::event::SessionEvent;
 use crate::plan::CapturePlan;
+use crate::stats::StreamStats;
 
 /// Bounded lag between an event being published and the slowest subscriber
 /// reading it before `broadcast` starts reporting it as missed — generous
@@ -165,6 +166,19 @@ impl Session {
         match identity {
             StreamIdentity::Remote => Some(self.remote.elapsed()),
             StreamIdentity::Local => self.local.as_ref().map(StreamCapture::elapsed),
+        }
+    }
+
+    /// A live snapshot of `identity`'s statistics — frame count, duration,
+    /// level, loss count, gap count and the AEC state — what `cli` polls to
+    /// print the spec's required per-stream statistics. `None` only for
+    /// `Local` when there is no microphone stream, matching
+    /// [`Session::elapsed`].
+    #[must_use]
+    pub fn stream_stats(&self, identity: StreamIdentity) -> Option<StreamStats> {
+        match identity {
+            StreamIdentity::Remote => Some(self.remote.stats()),
+            StreamIdentity::Local => self.local.as_ref().map(StreamCapture::stats),
         }
     }
 

@@ -1,0 +1,20 @@
+[package]
+name = "transcriber-cli"
+description = "The phase 1-4 harness and composition root: list-sources and capture with the consent prompt and per-stream statistics. Binds transcriber-audio-win directly; writes no file of any kind."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+transcriber-core = { path = "../core" }
+transcriber-audio = { path = "../audio" }
+transcriber-audio-win = { path = "../audio-win" }
+transcriber-session = { path = "../session" }
+
+[lints]
+workspace = true

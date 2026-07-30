@@ -1424,3 +1424,73 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     Cargo die Datei als zweites, eigenständiges Test-Target). `fs_audit.rs`
     behält nur `mod harness;`, die vier `#[test]`-Funktionen und den
     Modul-Kommentar — danach 233 bzw. 211 Zeilen.
+- 2026-07-31: Issue #14 (`cli`-Harness und Composition Root) legt die
+  verbleibenden offenen Entscheidungen der Phase fest:
+  - **Zweisprachigkeit:** ein `--lang <de|en>`-Flag an beiden Subcommands,
+    Default `de` (passend zur deutschsprachigen Projekt-Dokumentation), statt
+    beide Sprachen gleichzeitig auszugeben — der Volltext der Attestation ist
+    schon lang genug, zwei Fassungen gleichzeitig hätten den Bestätigungs-Akt
+    eher verschleiert als geklärt. Die Bestätigung selbst verlangt das exakte,
+    sprachspezifische Wort ("ja" / "yes"), case-insensitive, getrimmt — jede
+    Abweichung (leer, Whitespace, EOF, "y", "n", "yes please", das falsche
+    Sprachwort) ist eine Ablehnung, nie eine Bestätigung. Der Attestation-Text
+    selbst kommt unverändert aus `ATTESTATION_V1_DE`/`_EN` in `core` — die CLI
+    tippt ihn nicht neu und kürzt ihn nicht.
+  - **Pro-Strom-Statistik, additiv in `session`:** Issue #9 hatte Leser-Zugriff
+    und Statistik bewusst zurückgestellt. Neu: `crates/session/src/stats.rs`
+    mit `StreamStats` (frame_count, duration, level_dbfs, loss_count,
+    gap_count, degradation) und `StatsReader`, der bei
+    `StreamCapture::spawn` einen eigenen `RingBuffer`-Leser registriert —
+    *vor* dem Start des Erfassungs-Threads, damit er ab dem ersten Sample
+    mitliest. `Session::stream_stats(identity)` legt das offen, analog zu
+    `Session::elapsed`. `frame_count` ist die Zahl der interleaved Samples
+    geteilt durch die Kanalzahl (ein "Frame" = ein Sample je Kanal);
+    `gap_count` fasst `discontinuity_count` und `timestamp_error_count`
+    zu einer Zahl zusammen (beide bleiben intern getrennte Zähler, wie von
+    Issue #5 verlangt — nur die CLI-Anzeige addiert sie). `level_dbfs` ist der
+    Spitzenpegel der seit dem letzten Poll gelesenen Samples, in dBFS, mit
+    einer Stille-Untergrenze von -96 dBFS (0-Amplitude hat keinen endlichen
+    Dezibel-Wert); ohne neue Samples seit dem letzten Poll bleibt der Wert
+    stehen, statt auf die Untergrenze zurückzufallen — sonst würde ein Meter
+    zwischen zwei Polls flackern. Der Leser drainiert bei jedem Poll
+    vollständig (Schleife bis `read()` 0 zurückgibt), damit er nur bei einem
+    echten Stillstand des Aufrufers Verlust meldet, nie durch sein eigenes
+    Poll-Intervall. `capture.rs` wuchs dadurch über die 400-Zeilen-Grenze;
+    der Testblock wanderte nach `capture/tests.rs`, dem in dieser Spec
+    etablierten Muster folgend.
+  - **Zwei Subcommands, kein Bypass:** `list-sources [--lang]` und
+    `capture --pid <PID> [--lang]`. Kein `--yes`/`--force`-Schalter — jeder
+    Weg, das Consent-Gate zu umgehen, wäre ein Bruch des Kernversprechens.
+    `capture` löst die `--pid` gegen eine **frische**
+    `SourceFactory::list_subjects()`-Abfrage auf und zeigt Prozessname und
+    Wurzel-PID **vor** der Attestation. Die spec-verbindliche zweite
+    Identitätsprüfung (Name **und** Startzeit) läuft weiterhin dort, wo sie
+    seit Issue #12 bereits sitzt — innerhalb von `SourceFactory::open_remote`
+    (`audio-win`s `verify_subject_identity`) — und wird von `cli` nur durch
+    den normalen Aufruf des Traits erreicht, nicht dupliziert.
+  - **Das Consent-Gate ist testbar, weil es eine reine Funktion ist:**
+    `capture_command::resolve_and_start` nimmt `SourceFactory`, `BufRead` und
+    `Write` generisch entgegen und liefert `Ok(None)` — nie eine `Session` —
+    sobald die Bestätigung ausbleibt. Mit `TestToneSources` als Fabrik belegen
+    Unit-Tests beide Richtungen: Ablehnung konstruiert nachweislich keine
+    `Session`, Bestätigung schon. Bei Ablehnung druckt die CLI eine Meldung,
+    die "Gegenseite: 0 Frames, Ich (Mikrofon): 0 Frames" wörtlich nennt —
+    ohne dass je eine `Session` existiert hätte, die das hätte melden können.
+  - **Stop per Enter, nicht per Ctrl+C:** die laufende Erfassung endet, sobald
+    der Nutzer eine Zeile auf stdin bestätigt (ein eigener Thread blockiert
+    auf `read_line`). Ctrl+C wurde bewusst **nicht** abgefangen: ein
+    Signal-Handler bräuchte entweder eine neue, in dieser Phase nicht
+    vorgesehene Abhängigkeit (z. B. `ctrlc`) oder `unsafe`-FFI — beides
+    außerhalb des Scopes dieses Issues. Bekannte Lücke, hier festgehalten
+    statt stillschweigend offen gelassen: ein Kill per Ctrl+C überspringt
+    `Session::drop`s explizites Nullen; das Betriebssystem gibt den Speicher
+    beim Prozessende ohnehin frei, der explizite Zeroize-Schritt davor entfällt
+    aber. Für die Planung als möglicher Folge-Punkt vorgemerkt, nicht als
+    Issue angelegt.
+  - **Kein Schreibpfad:** `cli` bietet keine `--output`-Datei und keine
+    Log-Datei an; jede Ausgabe geht nach stdout/stderr. Smoke-Test am
+    2026-07-31 gegen die echte Windows-Maschine: `list-sources` fand ohne
+    laufenden Ton-Erzeuger keine Quelle, und mit einer im Hintergrund
+    abgespielten `.wav`-Datei genau eine — `PID … WindowsTerminal.exe`,
+    aufgelöst über die bereits bekannte, nicht neu zu verhandelnde
+    Shell-Wurzel-Ausnahme (siehe die Liste der bereits gerouteten Punkte).
