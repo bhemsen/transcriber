@@ -13,8 +13,9 @@
 - Landmine: `gh auth login` gewährt `project` **nicht** automatisch. Remedy:
   `gh auth refresh -s project` (OAuth; bei einem PAT oder `GH_TOKEN` greift
   `gh auth refresh` nicht — dann das Token mit `project`-Scope neu erzeugen).
-- Zusätzlich für diesen Stack, auf Windows: Rust-Toolchain
-  `stable-x86_64-pc-windows-msvc` (via `rustup`), `cargo-deny`, CMake und die
+- Zusätzlich für diesen Stack, auf Windows: die in `rust-toolchain.toml`
+  gepinnte Rust-Toolchain (aktuell 1.85.0, via `rustup` — installiert sich beim
+  ersten `cargo`-Aufruf im Checkout automatisch), `cargo-deny`, CMake und die
   Visual-Studio-C++-Build-Tools. `whisper.cpp` und `sherpa-onnx` werden aus den
   Quellen gebaut; ohne diese vier scheitert Bootstrap.
 

@@ -387,3 +387,18 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   `docs/architecture.md` und den Lint-Kommentar in `Cargo.toml` — trägt sie ihre
   eigene Korrektur in der Liste in In scope; eine Entscheidung, die ein Dokument
   hinter sich unwahr lässt, ist nicht fertig.
+- 2026-07-30: Der CI-Workflow installiert `cargo-deny` mit der vorinstallierten
+  `stable`-Toolchain des Runners (`cargo +stable install`), nicht mit der in
+  `rust-toolchain.toml` gepinnten MSRV, und pinnt die Version explizit
+  (`--version 0.20.2`). Grund: `cargo-deny`s eigene MSRV läuft der unseren
+  unabhängig davon und schon voraus — 0.20.x verlangt Rust ≥ 1.88, während diese
+  Phase auf 1.85.0 pinnt. Ein `cargo install cargo-deny --locked` ohne
+  Toolchain- und Versions-Override hätte in CI **erst nach dem Merge** mit
+  einem MSRV-Fehler abgebrochen; lokal blieb es unbemerkt, weil dort bereits
+  eine vorgebaute `cargo-deny`-Binary (dieselbe Version, 0.20.2) installiert
+  war und der aus dem Quelltext bauende Fall — der einzige, an dem die MSRV
+  greift — nie durchlief. Die Versions-Pinnung ist ein separater Grund: sie
+  hält das Gate reproduzierbar, unabhängig vom Toolchain-Override. Wer die
+  Projekt-MSRV anhebt, sollte die Toolchain-Entkopplung nicht stillschweigend
+  entfernen — sie ist einzig deshalb da, weil `cargo-deny` keine
+  Rückwärtskompatibilität zur gepinnten Rust-Version zusichert.

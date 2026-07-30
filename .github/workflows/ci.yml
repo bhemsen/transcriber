@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      # Built with the runner's preinstalled `stable` toolchain, not the
+      # project's pinned 1.85.0: cargo-deny's own MSRV moves independently of
+      # ours and can outrun it (0.20.x already requires rustc >= 1.88).
+      - name: Install cargo-deny
+        run: cargo +stable install cargo-deny --locked --version 0.20.2
+
+      - name: Verify
+        run: cargo xtask verify
