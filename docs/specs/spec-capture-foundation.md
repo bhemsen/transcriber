@@ -73,7 +73,8 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
      `protocol` darf laut Boundaries aber nur `core` kennen und braucht sie im
      Segment. `StreamIdentity` gehört nach `core`.
   4. Der Doc-Kommentar in `crates/core/src/lib.rs` kündigt `Session` für `core` an
-     und wird mit Korrektur 1 mitgezogen.
+     (Korrektur 1) **und** sagt, die Crate hänge von nichts außerhalb der
+     Standardbibliothek ab (Korrektur 2). Beide Sätze werden mitgezogen.
   5. `docs/architecture.md` nennt `audio-win` „das einzige Crate mit `unsafe`". Nach
      dieser Phase hat **kein** Crate `unsafe` — die Zeile wird zu „das einzige Crate,
      das die `unsafe`-Ausnahme ziehen **darf**, wenn ein konkreter Fall sie erzwingt".
@@ -230,9 +231,9 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 | Der Quell-Audit liegt in `xtask/tests/no_write_paths.rs` — eine **bewusste Abweichung** von der Constitution, die den Pfad wörtlich als `tests/no_write_paths.rs` nennt | Der Workspace-Root ist ein virtuelles Manifest ohne Package, also kompiliert ein Wurzel-`tests/`-Verzeichnis nicht und `cargo test --workspace` würde den Test nie ausführen. `xtask` ist bereits die Heimat der Workspace-Gates. Die Abweichung wird am Spec-Acceptance-Gate offengelegt, nicht stillschweigend vollzogen | 2026-07-30 |
 | Der Audit prüft die Crate-Liste und überspringt noch nicht existierende Crates | Lässt den Test mit den Phasen wachsen, statt bei jeder neuen Phase zu brechen | 2026-07-30 |
 | Der Audit prüft **zusätzlich zur** Symbol-Blockliste der Constitution (`fs::write`, `fs::File::create`, `OpenOptions::write`, `reqwest`, `ureq`) auf `Serialize`/`serde` und wertet den **Abhängigkeitsgraphen** der Erfassungs-Crates aus | „Kein `Serialize` für Audio-Typen" ist ein Don't, das sich nicht als negative Trait-Zusicherung ausdrücken lässt. Ein Scan belegt nur die Abwesenheit **benannter** Symbole — die Manifest- und Graph-Prüfung schließt die Lücke, die ein Alias oder ein eigener `impl Write` sonst offen ließe | 2026-07-30 |
-| Der Sitzungs-FS-Audit läuft **in Phase 1**, gerätefrei über die Testton-Quelle. Er beobachtet ein **prozess-eigenes** Verzeichnis: `TMP` und `TEMP` werden für die Testsitzung auf ein frisches Verzeichnis umgebogen, und nur dieses sowie das Arbeitsverzeichnis werden verglichen | Die Constitution sagt „**bei jeder Änderung am Datenpfad** läuft zusätzlich der FS-Audit-Test" — Phase 1 *ist* der Datenpfad. `docs/workflow.md` macht ihn ab Phase 4 verpflichtend, was die frühere Zeile nicht aufhebt. Mit der Testton-Quelle ist er ohne Audiogerät lauffähig. Das gemeinsame Temp-Verzeichnis zu vergleichen wäre derselbe Fehler wie ein Snapshot über das ganze Nutzerprofil: cargo und fremde Prozesse schreiben dort, das Gate würde sporadisch rot und damit wertlos | 2026-07-30 |
+| Der Sitzungs-FS-Audit läuft **in Phase 1**, gerätefrei über die Testton-Quelle. Er beobachtet ein **prozess-eigenes** Verzeichnis: die Sitzung bekommt ein frisches Arbeitsverzeichnis **übergeben**, und nur dieses wird verglichen. Umbiegen von `TMP`/`TEMP` im laufenden Prozess ist **kein** gültiger Weg — `std::env::set_var` ist in Edition 2024 `unsafe`, und `forbid(unsafe_code)` gilt auch für Testcode. Wird eine Umgebungsvariable gebraucht, dann über einen Kindprozess (`Command::env`) | Die Constitution sagt „**bei jeder Änderung am Datenpfad** läuft zusätzlich der FS-Audit-Test" — Phase 1 *ist* der Datenpfad. `docs/workflow.md` macht ihn ab Phase 4 verpflichtend, was die frühere Zeile nicht aufhebt. Mit der Testton-Quelle ist er ohne Audiogerät lauffähig. Das gemeinsame Temp-Verzeichnis zu vergleichen wäre derselbe Fehler wie ein Snapshot über das ganze Nutzerprofil: cargo und fremde Prozesse schreiben dort, das Gate würde sporadisch rot und damit wertlos | 2026-07-30 |
 | Das Consent-Gate wird per `compile_fail`-Fall (`trybuild`) belegt, nicht per Review-Urteil | Das Vision-Kriterium lautet „die Aufnahme startet **nachweisbar** nie ohne bestätigte Attestation". Ein Review ist eine Momentaufnahme, ein `compile_fail`-Fall ein Dauergate | 2026-07-30 |
-| Kein Design-Zyklus (`/loopkit:design`) in dieser Phase | Phase 1 liefert ein CLI-Harness, hat also keine UI-Fläche. Die Zustandsmaschine ist oben mit vier Zuständen und drei Kanten vollständig beschrieben — eine Visualisierung würde keine Entscheidung schärfen. Quellenauswahl und Consent-Dialog sind in `docs/design.md` als Komponenten festgelegt und werden in Phase 5 entworfen | 2026-07-30 |
+| Kein Design-Zyklus (`/loopkit:design`) in dieser Phase | Phase 1 liefert ein CLI-Harness, hat also keine UI-Fläche. Die Zustandsmaschine ist oben mit drei Zuständen und zwei Kanten vollständig beschrieben — eine Visualisierung würde keine Entscheidung schärfen. Quellenauswahl und Consent-Dialog sind in `docs/design.md` als Komponenten festgelegt und werden in Phase 5 entworfen | 2026-07-30 |
 | OPEN — Wortlaut der Consent-Attestation (DE + EN), die vor jedem Start bestätigt wird | resolved at the spec-acceptance gate | — |
 | OPEN — Verhalten, wenn das Mikrofon keine Echokompensation unterstützt: warnen und weiterlaufen, oder Start verweigern, bis Kopfhörer bestätigt sind | resolved at the spec-acceptance gate | — |
 | OPEN — gehören die drei Fundament-Nachzüge aus Phase 0 (Edition 2024, gepinnte MSRV, CI-Workflow) in diese Phase? Die Alternative ist **nicht** von der Planung ausführbar: `track:adhoc`-Issues erzeugt laut `docs/workflow.md` der Mensch. Bei „nicht in dieser Phase" entfällt der CI-Halbsatz in der Verification-Überschrift und der Mensch legt die Issues an | resolved at the spec-acceptance gate | — |
@@ -268,7 +269,8 @@ Maschinell, in Verify (und, je nach offener Entscheidung, in CI):
       für die Fan-out-Zusage an Phase 2/3.
 - [ ] Resampling-Test: 48 kHz stereo → 16 kHz mono gegen einen synthetischen Sinus
       (Frequenz bleibt, Länge stimmt, kein Aliasing über der Nyquist-Grenze).
-- [ ] Zeitachsen-Test: eine injizierte `data_discontinuity` erscheint als Lücke mit
+- [ ] Zeitachsen-Test über alle drei Flags: eine injizierte `data_discontinuity`
+      **und** ein injizierter `timestamp_error` erscheinen je als Lücke mit eigenem
       Zähler; `silent`-Frames erscheinen als Nullen, die Achse bleibt dicht.
 - [ ] `session`-Test: `stop()` nullt die Puffer; danach ist kein Sample ungleich Null
       mehr auffindbar.
