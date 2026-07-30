@@ -30,7 +30,7 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 - [ ] Bei Lautsprecher-Nutzung erscheint der Ton der Gegenseite nicht im `Local`-Strom
       — die betriebssystemseitige Echokompensation ist aktiv, oder ihre Abwesenheit
       ist offengelegt.
-- [ ] `cargo xtask verify` läuft lokal grün.
+- [ ] `cargo xtask verify` läuft lokal grün und in CI auf `windows-latest`.
 - [ ] Kein Foundation-Dokument und kein Kommentar im Repo widerspricht mehr dem
       Code — die belegten Widersprüche sind aufgelöst (Liste in In scope).
 
@@ -167,6 +167,16 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 
 ## Human prerequisites
 
+Am Spec-Acceptance-Gate am 2026-07-30 vorgelegt. Nichts davon blockiert die
+Implementierung: die Toolchain ist durch den Commit „prove Bootstrap and Verify"
+belegt, alle übrigen Punkte sind **Voraussetzungen des QA-Gates** am Ende der Phase,
+nicht des Bauens. Sie werden dort abgehakt.
+
+- [x] Rust-Toolchain und `cargo-deny` lokal vorhanden — belegt, Verify läuft. CMake
+      und die Visual-Studio-C++-Build-Tools aus `docs/workflow.md` werden erst ab
+      Phase 2 gebraucht; Bootstrap ist in Phase 1 nur `cargo fetch --locked`.
+- [x] Keine Secrets, keine Accounts, keine externe Provisionierung. GitHub Actions
+      ist auf diesem öffentlichen Repo kostenfrei — nichts zu hinterlegen.
 - [ ] Windows-11-Maschine mit funktionierendem Mikrofon **und** Lautsprechern
       (nicht nur Headset) — die Echokompensation ist nur mit Lautsprechern prüfbar.
 - [ ] Die Windows-Datenschutzeinstellung „Apps dürfen auf das Mikrofon zugreifen"
@@ -179,11 +189,6 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 - [ ] Ein **zweiter Gesprächsteilnehmer** oder ein zweites Gerät im Call. Ohne eine
       sprechende Gegenseite sind der Pegel-Nachweis auf `Remote` und der komplette
       AEC-Testfall am QA-Gate nicht durchführbar.
-- [ ] Rust-Toolchain und `cargo-deny` lokal vorhanden. CMake und die
-      Visual-Studio-C++-Build-Tools aus `docs/workflow.md` werden erst ab Phase 2
-      gebraucht — Bootstrap ist in Phase 1 nur `cargo fetch --locked`.
-- [ ] Keine Secrets, keine Accounts, keine externe Provisionierung. GitHub Actions
-      ist auf diesem öffentlichen Repo kostenfrei — nichts zu hinterlegen.
 
 ## Prior decisions
 
@@ -234,13 +239,36 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 | Der Sitzungs-FS-Audit läuft **in Phase 1**, gerätefrei über die Testton-Quelle. Er beobachtet ein **prozess-eigenes** Verzeichnis: die Sitzung bekommt ein frisches Arbeitsverzeichnis **übergeben**, und nur dieses wird verglichen. Umbiegen von `TMP`/`TEMP` im laufenden Prozess ist **kein** gültiger Weg — `std::env::set_var` ist in Edition 2024 `unsafe`, und `forbid(unsafe_code)` gilt auch für Testcode. Wird eine Umgebungsvariable gebraucht, dann über einen Kindprozess (`Command::env`) | Die Constitution sagt „**bei jeder Änderung am Datenpfad** läuft zusätzlich der FS-Audit-Test" — Phase 1 *ist* der Datenpfad. `docs/workflow.md` macht ihn ab Phase 4 verpflichtend, was die frühere Zeile nicht aufhebt. Mit der Testton-Quelle ist er ohne Audiogerät lauffähig. Das gemeinsame Temp-Verzeichnis zu vergleichen wäre derselbe Fehler wie ein Snapshot über das ganze Nutzerprofil: cargo und fremde Prozesse schreiben dort, das Gate würde sporadisch rot und damit wertlos | 2026-07-30 |
 | Das Consent-Gate wird per `compile_fail`-Fall (`trybuild`) belegt, nicht per Review-Urteil | Das Vision-Kriterium lautet „die Aufnahme startet **nachweisbar** nie ohne bestätigte Attestation". Ein Review ist eine Momentaufnahme, ein `compile_fail`-Fall ein Dauergate | 2026-07-30 |
 | Kein Design-Zyklus (`/loopkit:design`) in dieser Phase | Phase 1 liefert ein CLI-Harness, hat also keine UI-Fläche. Die Zustandsmaschine ist oben mit drei Zuständen und zwei Kanten vollständig beschrieben — eine Visualisierung würde keine Entscheidung schärfen. Quellenauswahl und Consent-Dialog sind in `docs/design.md` als Komponenten festgelegt und werden in Phase 5 entworfen | 2026-07-30 |
-| OPEN — Wortlaut der Consent-Attestation (DE + EN), die vor jedem Start bestätigt wird | resolved at the spec-acceptance gate | — |
-| OPEN — Verhalten, wenn das Mikrofon keine Echokompensation unterstützt: warnen und weiterlaufen, oder Start verweigern, bis Kopfhörer bestätigt sind | resolved at the spec-acceptance gate | — |
-| OPEN — gehören die drei Fundament-Nachzüge aus Phase 0 (Edition 2024, gepinnte MSRV, CI-Workflow) in diese Phase? Die Alternative ist **nicht** von der Planung ausführbar: `track:adhoc`-Issues erzeugt laut `docs/workflow.md` der Mensch. Bei „nicht in dieser Phase" entfällt der CI-Halbsatz in der Verification-Überschrift und der Mensch legt die Issues an | resolved at the spec-acceptance gate | — |
+| Der Attestation-Text ist die ausführliche Fassung mit DSGVO-Teil, im Volltext unten. `ATTESTATION_V1` in `core`, deutsch als Quelle, englisch 1:1 daraus übersetzt | Am Spec-Acceptance-Gate entschieden. Die Attestation **ist** laut `docs/vision.md` die Dokumentation des Consents — sie muss dem Nutzer sagen, wofür er einsteht, nicht nur ein Häkchen einsammeln. Die Sätze über die abwesende Aufnahme und das nicht überlebende Stimmprofil stehen darin, weil der Nutzer beim Einholen des Einverständnisses genau das zusichern können muss | 2026-07-30 |
+| Fehlt die Echokompensation (`is_aec_supported() == false`), wird **gewarnt und weitergelaufen**. Die Degradierung wird im Sitzungszustand geführt, von der CLI ausgegeben und ab Phase 4 im Protokollkopf vermerkt | Am Spec-Acceptance-Gate entschieden. Ein Startverbot würde das Werkzeug auf jeder Maschine ohne AEC-fähiges Mikrofon unbenutzbar machen — auch für Nutzer mit Kopfhörern, die es gar nicht brauchen. Offenlegen statt bevormunden: der Nutzer sieht, dass die Sprecherzuordnung in dieser Sitzung unsicher ist | 2026-07-30 |
+| Alle drei Fundament-Nachzüge aus Phase 0 (Edition 2024, in `rust-toolchain.toml` gepinnte MSRV, CI-Workflow auf `windows-latest`) gehören **in diese Phase**, als erstes und kleinstes Issue | Am Spec-Acceptance-Gate entschieden. Diese Phase legt vier neue Crates an, die die Edition erben — sie auf 2021 zu bauen und später zu migrieren wäre teurer als der Nachzug jetzt. Ohne CI mergen alle folgenden PRs allein gegen lokales Verify | 2026-07-30 |
+
+### Attestation-Text V1 (verbindlicher Wortlaut)
+
+Deutsch ist die Quelle; die englische Fassung wird daraus übersetzt und mit
+derselben Versionsnummer geführt. Der Text wird **im Volltext** angezeigt, nie
+gekürzt (`docs/design.md`, Consent-Dialog), und die Bestätigung ist nur über das
+Häkchen möglich.
+
+> Ich bestätige, dass ich alle Gesprächsteilnehmer vor Beginn der Erfassung über die
+> Mitschrift informiert habe und dass ihr Einverständnis vorliegt.
+>
+> Mir ist bewusst, dass das Aufzeichnen oder Mitschreiben des nicht öffentlich
+> gesprochenen Wortes ohne Einverständnis der Sprechenden strafbar ist (§ 201 StGB).
+>
+> Das entstehende Protokoll enthält personenbezogene Daten. Für seine Aufbewahrung
+> und Löschung bin ich verantwortlich.
+>
+> Es entsteht zu keinem Zeitpunkt eine Ton- oder Bildaufnahme, und kein Stimmprofil
+> überlebt diese Sitzung.
+>
+> Diese Bestätigung wird mit Zeitstempel im Protokollkopf festgehalten.
+>
+> `[ ]` Ich bestätige das Vorstehende.
 
 ## Tracking
 
-- Milestone: Phase 1 — Capture-Fundament Windows (angelegt am Spec-Acceptance-Gate)
+- Milestone: [Phase 1 — Capture-Fundament Windows](https://github.com/bhemsen/transcriber/milestone/1)
 - Issues: entstehen aus dieser Spec, sobald sie gemergt ist — eines je
   implementierbarem Schritt
 
@@ -248,7 +276,7 @@ Jedes Issue verweist im Body auf diesen Spec-Pfad.
 
 ## Verification
 
-Maschinell, in Verify (und, je nach offener Entscheidung, in CI):
+Maschinell, in Verify und in CI auf `windows-latest`:
 
 - [ ] `cargo xtask verify` grün — `fmt`, `clippy -D warnings`, `cargo test --workspace`,
       `cargo deny check`.
@@ -345,6 +373,11 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   Phase 4 laufen zu lassen. Der gefährlichste Einzelfund war der Kommentar in
   `Cargo.toml`, der einem künftigen Backend-Autor sagt, die Workspace-Lints nicht zu
   aktivieren — er hätte in Phase 8 oder 9 fünf Gates lautlos entfernt.
+- 2026-07-30: Spec-Acceptance-Gate. Drei offene Punkte entschieden: der
+  Attestation-Text in der ausführlichen Fassung mit DSGVO-Teil (Volltext oben), eine
+  fehlende Echokompensation wird gewarnt und nicht verboten, und alle drei
+  Fundament-Nachzüge aus Phase 0 laufen in dieser Phase. Damit ist keine Entscheidung
+  dieser Phase mehr offen.
 - 2026-07-30: `audio-win` startet mit `#![forbid(unsafe_code)]`, obwohl die
   Constitution dem Backend die Ausnahme erlaubt — jeder geprüfte `wasapi`-Aufruf ist
   eine safe Funktion, `sysinfo` ebenso, und die einzige `pub unsafe fn` der Crate
