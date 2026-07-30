@@ -136,27 +136,46 @@ fn bounded_tone_ends_exactly_after_its_frame_budget() {
 }
 
 /// The device-free stand-in for the Windows backend's event-wait timeout:
-/// every third `pull()` must report `Idle` without advancing the tone or
-/// ending it, and the frame-bearing calls in between must still carry
-/// samples. Without this, `#9`'s capture loop and `#14`'s CLI would ship
-/// their `Idle` handling untested until it first meets a real device.
+/// *exactly* every third `pull()` (not merely three calls out of nine, in
+/// whichever position) must report `Idle`, and the phase accumulator must
+/// not move during an `Idle` call — checked by comparing the first sample
+/// of the next frame against [`expected_sample`] at the frame index the
+/// tone would be at if only the six frame-bearing pulls ever advanced it,
+/// which catches a cadence off-by-one or a phase-advancing `Idle` branch
+/// that a plain idle/frame *count* could not. Without this mechanism at
+/// all, `#9`'s capture loop and `#14`'s CLI would ship their `Idle`
+/// handling untested until it first meets a real device.
 #[test]
 fn with_idle_every_reports_idle_on_the_configured_cadence() {
     let format = stereo_format();
     let mut source =
         TestToneSource::new(StreamIdentity::Remote, format, 440.0).with_idle_every(nonzero(3));
 
-    let mut idle_calls = 0;
-    let mut frame_calls = 0;
-    for _ in 0..9 {
-        match source.pull(Duration::from_millis(10)) {
-            Ok(AudioSourceEvent::Idle) => idle_calls += 1,
-            Ok(AudioSourceEvent::Frame(_)) => frame_calls += 1,
-            other => panic!("expected Idle or a frame, got {other:?}"),
+    let mut expected_frame_index = 0u64;
+    for pull_number in 1..=9u64 {
+        let event = match source.pull(Duration::from_millis(10)) {
+            Ok(event) => event,
+            Err(error) => panic!("the test tone must not error: {error}"),
+        };
+        if pull_number % 3 == 0 {
+            assert!(
+                matches!(event, AudioSourceEvent::Idle),
+                "pull #{pull_number} must be Idle, got {event:?}"
+            );
+            continue;
         }
+        let AudioSourceEvent::Frame(Frame::Samples { samples, .. }) = event else {
+            panic!("pull #{pull_number} must produce a Samples frame, got {event:?}");
+        };
+        let expected = expected_sample(expected_frame_index, 440.0, 48_000);
+        assert!(
+            (samples[0] - expected).abs() < 1e-4,
+            "pull #{pull_number}: an intervening Idle pull must not move the phase accumulator; \
+             got {} vs {expected}",
+            samples[0]
+        );
+        expected_frame_index += TestToneSource::FRAMES_PER_PULL;
     }
-    assert_eq!(idle_calls, 3, "every third of 9 pulls must be Idle");
-    assert_eq!(frame_calls, 6);
 }
 
 /// A session test that only ever sees `Box<dyn SourceFactory>` — the entire

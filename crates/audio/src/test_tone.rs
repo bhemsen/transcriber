@@ -83,8 +83,19 @@ impl TestToneSource {
     /// non-error outcome distinct from [`AudioSourceEvent::Ended`]), so code
     /// built against this source exercises its `Idle` handling before it
     /// ever touches a device.
+    ///
+    /// `n == 1` would make *every* pull `Idle`, so this source could never
+    /// produce a frame — and, combined with [`Self::with_total_frames`],
+    /// could never reach [`AudioSourceEvent::Ended`] either, hanging a
+    /// caller's drain loop forever. Debug builds catch that degenerate
+    /// configuration; it is not itself unsafe, so release builds do not pay
+    /// for the check.
     #[must_use]
     pub fn with_idle_every(mut self, n: NonZeroU64) -> Self {
+        debug_assert!(
+            n.get() > 1,
+            "with_idle_every(1) makes every pull Idle: no frame, and no Ended once bounded, could ever be produced"
+        );
         self.idle_every = Some(n);
         self
     }
@@ -222,7 +233,8 @@ impl TestToneSources {
 
     /// Makes every source this factory opens report
     /// [`AudioSourceEvent::Idle`] every `n`th `pull()` — see
-    /// [`TestToneSource::with_idle_every`].
+    /// [`TestToneSource::with_idle_every`], including its `n == 1` caveat
+    /// when combined with [`Self::with_total_frames`].
     #[must_use]
     pub fn with_idle_every(mut self, n: NonZeroU64) -> Self {
         self.idle_every = Some(n);

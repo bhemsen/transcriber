@@ -639,11 +639,13 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     zu öffnen.
   - `TestToneSource` synthetisiert einen Sinus aus einem Phasenakkumulator,
     der über `pull`-Aufrufe hinweg weiterläuft (kein Klicken an
-    Chunk-Grenzen), in Chunks von 480 Frames (10 ms bei 48 kHz — dieselbe
-    Paketgröße, die `get_next_packet_size()` auf dem echten Loopback-Client
-    liefert) und mit `with_total_frames(...)` optional auf ein festes Budget
-    begrenzt, damit ein Test `Ended` deterministisch erreichen kann, ohne dass
-    ein Gerät das Stromende signalisiert. `TestToneSources` vergibt dem
+    Chunk-Grenzen), in Chunks von 480 Frames (10 ms bei 48 kHz — in derselben
+    Größenordnung wie das, was `get_next_packet_size()` auf dem echten
+    Loopback-Client liefert; der reale Wert schwankt mit der
+    Geräte-Periode, landet also nicht zuverlässig exakt auf 480) und mit
+    `with_total_frames(...)` optional auf ein festes Budget begrenzt, damit
+    ein Test `Ended` deterministisch erreichen kann, ohne dass ein Gerät das
+    Stromende signalisiert. `TestToneSources` vergibt dem
     `Remote`- und dem `Local`-Strom unterschiedliche Frequenzen (440/660 Hz),
     damit ein künftiger Zwei-Strom-Sitzungstest (Issue #9) sie allein am Ton
     unterscheiden kann, und `without_microphone()` lässt `open_local()`
