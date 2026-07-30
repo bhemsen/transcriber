@@ -938,8 +938,9 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     Funktionen). Behoben nach dem im Repo etablierten Muster
     (`crates/audio/src/test_tone.rs` + `test_tone/tests.rs`): das
     Testmodul wandert nach `crates/session/src/session/tests.rs`,
-    `session.rs` behält nur `#[cfg(test)] mod tests;`. Jetzt 286 bzw.
-    163 Zeilen.
+    `session.rs` behält nur `#[cfg(test)] mod tests;`. Direkt danach 286
+    bzw. 163 Zeilen — spätere Regressionstests (Runden 3 und 4) lassen
+    beide seither weiterwachsen, bleiben aber unter der Grenze.
   - **Der Fund:** Der `Drop`-Fix der ersten Runde behob den unbegrenzten
     Fall (Bug 2), führte aber eine **begrenzte** Version derselben
     Fehlerform am Abbruchpfad wieder ein: `Session` selbst hatte keinen
