@@ -10,9 +10,11 @@ license = "Apache-2.0"
 repository = "https://github.com/bhemsen/transcriber"
 authors = ["transcriber contributors"]
 
-# Opted into per crate via `[lints] workspace = true`. The platform backends
-# (audio-win, audio-mac, audio-linux) deliberately do NOT opt in, because they
-# need `unsafe` for the native audio APIs — see docs/constitution.md.
+# Opted into per crate via `[lints] workspace = true` — every crate, platform
+# backends (audio-win, audio-mac, audio-linux) included. Only if a backend
+# actually draws the `unsafe` exemption (a concrete case forces it — see
+# docs/constitution.md) does that crate stop using `[lints] workspace = true`
+# and instead duplicate every lint below except `unsafe_code`.
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
