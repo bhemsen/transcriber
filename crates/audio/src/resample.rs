@@ -111,8 +111,15 @@ impl StreamResampler {
             chunk_frames_in,
             chunk_frames_out,
             raw_scratch: Zeroizing::new(vec![0.0; chunk_frames_in * channels]),
-            raw_leftover: Zeroizing::new(Vec::with_capacity(channels)),
-            mono_pending: Zeroizing::new(Vec::with_capacity(chunk_frames_in)),
+            // Sized for the largest transient `downmix` ever builds — the
+            // previous leftover (< channels) plus one full `raw_scratch` —
+            // so `extend_from_slice` never reallocates a buffer that still
+            // holds PCM out from under `Zeroizing`.
+            raw_leftover: Zeroizing::new(Vec::with_capacity(chunk_frames_in * channels + channels)),
+            // `fill_pending_and_resample` can overshoot `chunk_frames_in` by
+            // up to one more full pull before resampling, so the largest
+            // transient length is just under double.
+            mono_pending: Zeroizing::new(Vec::with_capacity(2 * chunk_frames_in)),
             output_ready: Zeroizing::new(Vec::with_capacity(chunk_frames_out)),
             output_cursor: 0,
             resampler,
@@ -171,8 +178,12 @@ impl StreamResampler {
     /// `RingBuffer::read` has no reason to always hand back whole frames.
     ///
     /// Mutates `raw_leftover` in place (append, then drop the consumed
-    /// prefix) rather than building a fresh combined buffer each call, so
-    /// its small allocation is made once and reused, not replaced.
+    /// prefix) rather than building a fresh combined `Vec` each call. Its
+    /// capacity is pre-reserved in `new()` for the largest transient size
+    /// this ever reaches, so in practice this never reallocates either —
+    /// which matters for more than speed: a `Zeroizing<Vec<f32>>` that
+    /// *did* reallocate while holding PCM would free the old, unzeroized
+    /// backing buffer.
     fn downmix(&mut self, len: usize) {
         self.raw_leftover
             .extend_from_slice(&self.raw_scratch[..len]);
