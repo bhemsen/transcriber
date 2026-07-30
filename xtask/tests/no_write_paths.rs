@@ -59,44 +59,33 @@ fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()>
 
 /// Direct dependency names declared in `[dependencies]` of `manifest_path` —
 /// the "manifest" layer of the audit, independent of the transitive graph
-/// below.
-///
-/// Handles the flat `name = "version"` / `name = { ... }` form every guarded
-/// crate's `Cargo.toml` uses today, single line per dependency. A
-/// `[dependencies.foo]` sub-table would not be recognised — a disclosed
-/// scope limit, not a silent gap: nothing in this workspace uses that form.
+/// below. The actual parsing is [`audit::parse_direct_dependencies`], a pure
+/// function unit-tested against fixtures; this wrapper only does the read.
 fn direct_dependencies(manifest_path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
     let text = fs::read_to_string(manifest_path)?;
-    let mut in_dependencies = false;
-    let mut names = Vec::new();
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
-        if let Some(header) = line
-            .strip_prefix('[')
-            .and_then(|rest| rest.strip_suffix(']'))
-        {
-            in_dependencies = header == "dependencies";
-            continue;
-        }
-        if !in_dependencies || line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some((name, _)) = line.split_once('=') {
-            names.push(name.trim().to_string());
-        }
-    }
-    Ok(names)
+    audit::parse_direct_dependencies(&text)
+        .map_err(|reason| format!("{}: {reason}", manifest_path.display()).into())
 }
 
 /// The crate's full normal+build dependency graph, via `cargo tree` — the
 /// transitive layer a source- or manifest-only scan cannot see, e.g. a
-/// dependency that itself starts pulling in `serde`. `--offline` because
-/// nothing in this workspace's guarded crates may reach the network, this
-/// audit included.
+/// dependency that itself starts pulling in `serde`. `--offline --locked`
+/// because nothing in this workspace's guarded crates may reach the
+/// network, this audit included, and a stale lockfile should fail loudly
+/// rather than have `cargo tree` silently resolve around it. `env!("CARGO")`
+/// rather than a bare `"cargo"` runs the exact toolchain currently building,
+/// not whatever `cargo` a PATH lookup would happen to find.
+///
+/// Fails loudly if the parsed graph does not even contain `package` itself
+/// — cargo tree always lists the root package first, so its absence means
+/// the parser or the command broke, not that the crate has no dependencies.
+/// An empty-but-plausible result is exactly what a broken graph check would
+/// also produce, so this is the difference between "clean" and "untested".
 fn dependency_graph(root: &Path, package: &str) -> Result<Vec<String>, Box<dyn Error>> {
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO"))
         .arg("tree")
         .arg("--offline")
+        .arg("--locked")
         .arg("--manifest-path")
         .arg(root.join("Cargo.toml"))
         .args(["-p", package, "-e", "normal,build", "--prefix", "none"])
@@ -106,11 +95,14 @@ fn dependency_graph(root: &Path, package: &str) -> Result<Vec<String>, Box<dyn E
         return Err(format!("cargo tree -p {package} failed: {stderr}").into());
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout
-        .lines()
-        .filter_map(|line| line.split_whitespace().next())
-        .map(str::to_string)
-        .collect())
+    let names = audit::parse_dependency_graph_names(&stdout);
+    if !names.iter().any(|name| name == package) {
+        return Err(format!(
+            "cargo tree -p {package} did not list the package itself — parser or command likely broken"
+        )
+        .into());
+    }
+    Ok(names)
 }
 
 /// Runs every layer of the audit — source text, manifest, dependency graph —
@@ -125,6 +117,10 @@ fn audit_crate(
 
     let mut files = Vec::new();
     collect_rust_files(&crate_dir.join("src"), &mut files)?;
+    let build_script = crate_dir.join("build.rs");
+    if build_script.exists() {
+        files.push(build_script);
+    }
     for file in &files {
         let source = fs::read_to_string(file)?;
         for finding in audit::scan_source_text(&source) {

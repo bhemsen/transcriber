@@ -496,3 +496,46 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     `pub(crate)`-Sichtbarkeit hätte über die Crate-Grenze hinweg nicht mehr
     gegolten. Die `<name>/mod.rs`-Form ist das etablierte Muster für
     geteilte Hilfsmodule in Integrationstests, genau um das zu vermeiden.
+- 2026-07-30: Review-Runde durch einen frischen Agenten (Opus) deckte einen
+  echten Fund auf und führte zu vier Nachschärfungen, alle vor dem Merge
+  umgesetzt:
+  - **Der Fund:** `fs::File::create` als wörtliche Zeichenkette erkennt die
+    idiomatische Form nie, die echter Code tatsächlich schreibt —
+    `use std::fs::File;` gefolgt vom nicht qualifizierten `File::create(...)`
+    — weil der volle Pfad dabei nirgends zusammenhängend im Quelltext steht.
+    Genau dieselbe Beobachtung, die zur Builder-Heuristik für
+    `OpenOptions::write` führte, war auf `File::create` nicht angewandt
+    worden. Behoben durch Ersetzen des Blocklist-Eintrags durch `File::create`
+    (Teilstring von `fs::File::create`, erkennt also weiterhin auch die
+    vollqualifizierte Form, zusätzlich auch `File::create_new`) und eine
+    zweite Builder-Heuristik für den Alias `File::options().write(...)`
+    (stabil seit Rust 1.75 — dasselbe Muster wie `OpenOptions::new()`, nur
+    unter anderem Namen).
+  - Der Manifest- und der Graph-Parser bekamen je eine
+    Nicht-Vakuität-Prüfung, dem bereits vorhandenen
+    `at_least_one_guarded_crate_exists…`-Test nachgebildet: der
+    Graph-Parser schlägt fehl, wenn das aufgerufene Paket nicht einmal sich
+    selbst in der `cargo tree`-Ausgabe findet (das wäre sonst von einem
+    kaputten Parser, der leer zurückgibt, nicht unterscheidbar); der
+    Manifest-Parser schlägt fehl, wenn er nie einen `[dependencies]`-Header
+    gesehen hat, statt eine leere, fälschlich "saubere" Liste zu melden.
+  - Die Crate-Namen-Prüfung wechselt von exaktem Abgleich auf Präfix-Abgleich
+    (`name.starts_with(prefix)`), weil `serde` sich seit 1.0.220 in
+    `serde_core`/`serde_derive` aufspaltet — eine Familie, die unter dem
+    exakten Namen `serde` durchrutschen könnte, ohne dass die Kern-Crate
+    selbst je auftaucht.
+  - `cargo tree` bekommt zusätzlich `--locked` (ein veraltetes Lockfile soll
+    laut fehlschlagen, nicht still umgangen werden) und läuft über
+    `env!("CARGO")` statt der wörtlichen Zeichenkette `"cargo"`, damit exakt
+    die bauende Toolchain aufgerufen wird, nicht was ein `PATH`-Lookup sonst
+    fände. `audit_crate` liest zusätzlich `build.rs`, falls vorhanden — ein
+    Schreibpfad, den der reine `src/`-Scan sonst nie sehen würde.
+  - Bewusst zurückgestellt, als Folge-Empfehlung ohne diesen Merge zu
+    blockieren: eine vollständige Quervalidierung aller `crates/`-
+    Unterverzeichnisse gegen eine explizite Allow-/Guard-Liste (heute deckt
+    `at_least_one_guarded_crate_exists…` den akuten Fall ab, dass **keine**
+    bewachte Crate mehr gefunden wird; ein Tippfehler in genau **einem**
+    Eintrag bleibt möglich, solange mindestens eine andere Crate noch
+    existiert) und die Erkennung von `[target.'cfg(...)'.dependencies]` in
+    der Manifest-Schicht (relevant erst mit `audio-win`, dokumentiert als
+    offene Lücke im Doc-Kommentar von `parse_direct_dependencies`).
