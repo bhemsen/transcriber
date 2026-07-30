@@ -395,7 +395,10 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   Phase auf 1.85.0 pinnt. Ein `cargo install cargo-deny --locked` ohne
   Toolchain- und Versions-Override hätte in CI **erst nach dem Merge** mit
   einem MSRV-Fehler abgebrochen; lokal blieb es unbemerkt, weil dort bereits
-  eine neuere `cargo-deny`-Binary installiert war. Wer die Projekt-MSRV
-  anhebt, sollte diese Entkopplung nicht stillschweigend entfernen — sie ist
-  einzig deshalb da, weil `cargo-deny` keine Rückwärtskompatibilität zur
-  gepinnten Rust-Version zusichert.
+  eine vorgebaute `cargo-deny`-Binary (dieselbe Version, 0.20.2) installiert
+  war und der aus dem Quelltext bauende Fall — der einzige, an dem die MSRV
+  greift — nie durchlief. Die Versions-Pinnung ist ein separater Grund: sie
+  hält das Gate reproduzierbar, unabhängig vom Toolchain-Override. Wer die
+  Projekt-MSRV anhebt, sollte die Toolchain-Entkopplung nicht stillschweigend
+  entfernen — sie ist einzig deshalb da, weil `cargo-deny` keine
+  Rückwärtskompatibilität zur gepinnten Rust-Version zusichert.
