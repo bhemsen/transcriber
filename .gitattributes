@@ -1,0 +1,9 @@
+# The project targets Windows, macOS and Linux; normalise line endings in the
+# repository so a checkout on one platform does not produce a diff on another.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.onnx binary
+*.bin binary
