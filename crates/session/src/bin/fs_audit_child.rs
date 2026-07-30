@@ -12,6 +12,14 @@
 //! parent's proof the child did real work — a session that silently failed
 //! to start would otherwise "write 0 files" and pass the audit vacuously.
 //!
+//! Two env vars, both read only by this binary and set only by the
+//! harness-level tests in `tests/fs_audit.rs` (never by the main audit
+//! test), let the parent prove its detection actually works end to end
+//! through a *real* child process rather than only against an in-test
+//! fixture: [`LEAK_EVIDENCE_ENV_VAR`] leaves a real file behind in both
+//! watched directories, and [`TRANSIENT_WRITE_ENV_VAR`] writes one, holds
+//! it for a given duration, then deletes it before exit.
+//!
 //! Never invoked directly: only ever spawned via
 //! `env!("CARGO_BIN_EXE_fs_audit_child")` from `tests/fs_audit.rs`.
 
@@ -20,22 +28,41 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use transcriber_audio::{
-    AudioSource, AudioSourceError, AudioSourceEvent, SourceFactory, StreamFormat, TestToneSources,
+    AudioSource, AudioSourceError, AudioSourceEvent, SourceDegradation, SourceFactory,
+    StreamFormat, TestToneSources,
 };
 use transcriber_core::{AttestationVersion, CaptureSubject, ConsentAttestation, StreamIdentity};
 use transcriber_session::{CapturePlan, Session};
 
 /// Frames of synthetic tone each stream produces before its source reports
-/// [`AudioSourceEvent::Ended`] on its own — generous enough that the frame
-/// counters below are unambiguously nonzero, small enough that the whole
-/// child exits in well under a second.
-const TOTAL_FRAMES: u64 = 48_000;
+/// [`AudioSourceEvent::Ended`] on its own — large enough to keep both
+/// capture threads genuinely busy for a while (see the module doc on
+/// `tests/fs_audit.rs`'s poll interval), small enough that the whole child
+/// still exits in well under the parent's wait deadline.
+const TOTAL_FRAMES: u64 = 2_000_000;
 
-/// How long the child lets both capture threads run before calling
-/// `Session::stop` explicitly — wide enough for the parent's polling loop
-/// (`tests/fs_audit.rs`) to observe the watched directories at least once
-/// while this process is alive.
-const CAPTURE_WINDOW: Duration = Duration::from_millis(200);
+/// How long the child sleeps after `Session::start` returns, before calling
+/// `Session::stop` explicitly — on top of however long the capture threads
+/// stay genuinely busy processing [`TOTAL_FRAMES`].
+const CAPTURE_WINDOW: Duration = Duration::from_millis(100);
+
+/// Set (to any value) only by `tests/fs_audit.rs`'s
+/// `the_real_harness_notices_a_leak_from_a_real_child_process` — leaves a
+/// real, persistent file behind in the working directory and in the
+/// (redirected) temp directory after an otherwise ordinary session, so that
+/// test can prove the parent's actual watch-and-diff machinery notices a
+/// leak from a real process, not just from an in-test fixture.
+const LEAK_EVIDENCE_ENV_VAR: &str = "FS_AUDIT_CHILD_LEAK_EVIDENCE";
+
+/// Set (to a millisecond count) only by `tests/fs_audit.rs`'s
+/// `catches_a_transient_write_that_outlives_the_poll_interval` — writes a
+/// file, holds it open for that long, then deletes it before this process
+/// exits. Proves polling *can* catch a write immediately followed by a
+/// delete, for a file that lives at least a few poll intervals; it cannot
+/// prove polling catches every such file regardless of how briefly it
+/// exists — no wall-clock poll from a separate process can, without an
+/// OS-level filesystem watch, which this phase does not introduce.
+const TRANSIENT_WRITE_ENV_VAR: &str = "FS_AUDIT_CHILD_TRANSIENT_WRITE_MS";
 
 /// Wraps a source and counts every [`AudioSourceEvent::Frame`] it actually
 /// produces — this child's proof that the session did real work, not just
@@ -60,6 +87,10 @@ impl AudioSource for CountingSource {
             self.frames_pulled.fetch_add(1, Ordering::Relaxed);
         }
         Ok(event)
+    }
+
+    fn degradation(&self) -> Option<SourceDegradation> {
+        self.inner.degradation()
     }
 }
 
@@ -105,6 +136,36 @@ fn build_plan(
     )
 }
 
+/// See [`LEAK_EVIDENCE_ENV_VAR`]. A no-op unless that variable is set.
+fn leak_evidence_if_requested() {
+    if std::env::var_os(LEAK_EVIDENCE_ENV_VAR).is_none() {
+        return;
+    }
+    let _ = std::fs::write(
+        "leaked-into-cwd.txt",
+        b"deliberate leak for a harness-level test",
+    );
+    let _ = std::fs::write(
+        std::env::temp_dir().join("leaked-into-tmp.txt"),
+        b"deliberate leak for a harness-level test",
+    );
+}
+
+/// See [`TRANSIENT_WRITE_ENV_VAR`]. A no-op unless that variable is set to a
+/// valid millisecond count.
+fn simulate_transient_write_if_requested() {
+    let Some(value) = std::env::var_os(TRANSIENT_WRITE_ENV_VAR) else {
+        return;
+    };
+    let Some(hold_ms) = value.to_str().and_then(|text| text.parse::<u64>().ok()) else {
+        return;
+    };
+    let path = "transient-evidence.txt";
+    let _ = std::fs::write(path, b"written, then removed, before this process exits");
+    std::thread::sleep(Duration::from_millis(hold_ms));
+    let _ = std::fs::remove_file(path);
+}
+
 fn main() {
     let Ok(factory) = TestToneSources::new() else {
         fail("fixed 48 kHz stereo format is always valid");
@@ -125,11 +186,14 @@ fn main() {
         fail("session failed to start");
     };
 
+    simulate_transient_write_if_requested();
     std::thread::sleep(CAPTURE_WINDOW);
 
     if session.stop().is_err() {
         fail("session failed to stop cleanly");
     }
+
+    leak_evidence_if_requested();
 
     println!("remote_frames={}", remote_frames.load(Ordering::Relaxed));
     println!("local_frames={}", local_frames.load(Ordering::Relaxed));

@@ -1143,12 +1143,14 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
        reproduzierbar fehl (`expected exactly the nested evidence file, got
        []`), mit ihr wieder grün.
     3. *Während der Sitzung beobachten, nicht nur davor/danach.* Der
-       Parent-Test pollt beide Verzeichnisse alle 15 ms, solange der
-       Kindprozess läuft (`Child::try_wait`), zusätzlich zu je einer
-       Aufnahme vor dem Start und nach dem Exit — die Verteidigung gegen
-       eine Datei, die während der Sitzung geschrieben und vor deren Ende
-       wieder gelöscht wird. Ein reines Vorher/Nachher-Paar hätte diesen Fall
-       unsichtbar gelassen.
+       Parent-Test nimmt eine Aufnahme, **bevor** der Kindprozess gestartet
+       wird, pollt danach beide Verzeichnisse alle 2 ms, solange er läuft
+       (`Child::try_wait`), und nimmt eine letzte Aufnahme nach dem Exit.
+       Das erhöht die Chance, eine Datei zu sehen, die während der Sitzung
+       geschrieben und vor deren Ende wieder gelöscht wird, gegenüber einem
+       reinen Vorher/Nachher-Paar erheblich — ist aber **keine** Garantie für
+       jede denkbare Dauer einer solchen Datei; die Review-Runde unten
+       präzisiert das.
     4. *Der Detektor erkennt tatsächlich etwas.* Der zweite Test
        (`detects_a_file_written_into_either_watched_directory`) schreibt
        direkt (nicht über den Kindprozess) je eine Datei in eine verschachtelte
@@ -1180,3 +1182,67 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     `xtask::audit::GUARDED_CRATES` aufgenommen wird, bleibt die offene, an die
     Planung weitergereichte Frage aus Issue #9s Decision-Log-Eintrag — dieses
     Issue fügt `session` dort nicht hinzu.
+  - Ein Review vor dem Merge (frischer Agent, Opus), empirisch statt nur
+    lesend — es reproduzierte tatsächliche Fehlschläge, nicht nur
+    Vermutungen —, deckte drei echte Funde auf, alle behoben:
+    - **Der Fund:** die erste Fassung behauptete, das Poll-während-der-Sitzung
+      fange „die Verteidigung gegen eine Datei, die während der Sitzung
+      geschrieben und vor deren Ende wieder gelöscht wird" — eine Garantie,
+      die sie nicht einlöste. Mit dem damaligen Poll-Intervall (15 ms) und
+      einer Sitzung, deren `TestToneSource` 48 000 Frames in 13–23 ms ohne
+      reale Geräte-Wartezeit abarbeitet, blieb für eine geschriebene und
+      wieder gelöschte Datei nur ein 1–2 Polls breites Fenster; eine
+      injizierte Schreib-Warte-Lösch-Sequenz mit 5 ms Haltezeit entkam
+      reproduzierbar 10 von 10 Läufen. Behoben durch zwei Änderungen: das
+      Poll-Intervall sinkt auf 2 ms (`POLL_INTERVAL`), und `TOTAL_FRAMES` im
+      Kindprozess steigt von 48 000 auf 2 000 000, damit beide
+      Erfassungs-Threads spürbar länger tatsächlich beschäftigt sind. Mit
+      diesen Werten fing der Test dieselbe injizierte Sequenz in eigenen
+      Wiederholungsläufen **10 von 10 Malen bei 5 ms Haltezeit, 10 von 10 bei
+      1 ms und 15 von 15 sogar bei 0 ms** (Schreiben und sofortiges Löschen,
+      ohne Wartezeit dazwischen) — ein deutlich stärkeres empirisches
+      Ergebnis als erwartet, aber ausdrücklich **keine** mathematische
+      Garantie: kein aus einem separaten Prozess pollendes Verfahren kann das
+      ohne einen Betriebssystem-Dateisystem-Watch zusichern, den diese Phase
+      bewusst nicht einführt (neue Abhängigkeit, zusätzliche Komplexität,
+      unverhältnismäßig für ein gerätefreies Phase-1-Gate). Der Modul-Kommentar
+      in `tests/fs_audit.rs` benennt diese Grenze jetzt explizit, und ein
+      neuer, über einen echten Kindprozess laufender Test
+      (`catches_a_transient_write_that_outlives_the_poll_interval`, mit 50 ms
+      Haltezeit — großzügiger Sicherheitsabstand für einen langsameren
+      CI-Runner) belegt die Seite der Zusage, die tatsächlich eingelöst wird,
+      statt der überzogenen.
+    - **Der Fund:** die erste Fassung behauptete ebenfalls, die Verzeichnisse
+      würden „vor dem Start" aufgenommen — tatsächlich lag die erste Aufnahme
+      im ursprünglichen Code bereits **innerhalb** der Poll-Schleife, also
+      nach dem Spawn. Harmlos, solange `fresh_dir()` leere Verzeichnisse
+      liefert, aber eine falsche Behauptung, die dieselbe Lücke wie oben
+      unbemerkt vergrößert hätte. Behoben: `run_and_watch` nimmt jetzt
+      tatsächlich eine erste Aufnahme, bevor `spawn_child` überhaupt läuft.
+    - **Der Fund:** der Detektor-Test
+      (`detects_a_file_written_into_either_watched_directory`) bewies nur,
+      dass die reine `snapshot`/Differenz-Funktion einen Fund melden kann —
+      er rief nie `run_and_watch` auf. Ein Fehler, der `run_and_watch` dazu
+      gebracht hätte, das falsche Verzeichnis zu beobachten oder `snapshot`
+      nie aufzurufen, wäre von keinem Test in dieser Datei aufgefallen.
+      Behoben durch einen neuen, echten Kindprozess-Test
+      (`the_real_harness_notices_a_leak_from_a_real_child_process`):
+      `fs_audit_child` hinterlässt nur unter der env-Variable
+      `FS_AUDIT_CHILD_LEAK_EVIDENCE` (nie im Haupt-Audit) eine echte,
+      bleibende Datei in beiden beobachteten Verzeichnissen, und der Test
+      verlangt, dass `run_and_watch` genau diese über den echten Prozess
+      bemerkt — dieselbe Funktion, auf die sich der Haupttest verlässt.
+    - Vier kleinere Korrekturen aus derselben Runde: `CountingSource::
+      degradation()` reichte zuvor nicht an die innere Quelle durch (nutzte
+      den Trait-Default `None`) — heute ohne Verhaltensunterschied, weil
+      `TestToneSource` selbst immer `None` liefert, aber ein unvollständiger
+      Decorator, während `session`s eigener `DegradedSource`-Test-Double
+      genau deshalb existiert. `fresh_dir()` nutzt jetzt `fs::create_dir`
+      statt `create_dir_all`, damit eine Namenskollision (z. B. ein
+      liegengebliebenes Verzeichnis eines abgebrochenen Laufs bei
+      wiederverwendeter PID) laut scheitert statt ein möglicherweise nicht
+      leeres Verzeichnis still weiterzuverwenden. `spawn_child` räumt
+      `work_dir`/`temp_dir` jetzt auch auf seinem eigenen Panik-Pfad auf
+      (ein Spawn-Fehlschlag hätte sonst beide Verzeichnisse zurückgelassen).
+      Und der Haupttest bekam dieselbe „frisches Verzeichnis ist leer"-
+      Sanity-Assertion, die der Detektor-Test schon hatte.
