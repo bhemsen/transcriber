@@ -84,9 +84,24 @@ impl StreamCapture {
         })
     }
 
-    /// Signals the capture thread to stop and blocks until it has.
-    pub(crate) fn request_stop_and_join(&mut self) -> Result<(), SessionError> {
+    /// Signals the capture thread to stop, without waiting for it.
+    /// Idempotent — safe to call more than once, including from
+    /// [`Drop::drop`].
+    ///
+    /// Deliberately separate from [`Self::join`]: a caller stopping several
+    /// streams must signal *every* one before joining *any* of them, or an
+    /// error joining one stream (e.g. a panicked thread) would `?`-return
+    /// before a later stream's flag was ever set — leaving it running with
+    /// nothing left to stop it. See [`crate::Session::request_stop`].
+    pub(crate) fn signal_stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+
+    /// Blocks until the capture thread has stopped. Call
+    /// [`Self::signal_stop`] first on every stream that must stop.
+    /// Idempotent: a second call after the handle has already been taken
+    /// is a no-op `Ok(())`.
+    pub(crate) fn join(&mut self) -> Result<(), SessionError> {
         let Some(handle) = self.handle.take() else {
             return Ok(());
         };
@@ -134,6 +149,22 @@ impl StreamCapture {
     }
 }
 
+impl Drop for StreamCapture {
+    /// Best-effort cleanup for a `StreamCapture` dropped without going
+    /// through [`crate::Session::stop`] — a panic between `Session::start`
+    /// and `stop`, or an early `?`-return in a caller, must not leave a
+    /// capture thread running or a buffer un-zeroed; that would break both
+    /// "no thread is still writing" and the constitution's zeroing
+    /// guarantee. Idempotent: calling this after `stop` already ran is a
+    /// harmless no-op (`join` on an already-taken handle, `zeroize` on an
+    /// already-zero buffer).
+    fn drop(&mut self) {
+        self.signal_stop();
+        let _ = self.join();
+        self.zeroize();
+    }
+}
+
 /// Runs on a stream's dedicated capture thread until `stop` is set or the
 /// source itself ends: pulls one event at a time, pushes frames into `ring`,
 /// updates `position` from the normalised device timeline, and publishes a
@@ -163,7 +194,13 @@ fn capture_loop(
                 }
                 match ring.lock() {
                     Ok(mut ring) => ring.push(frame),
-                    Err(_) => break,
+                    Err(_) => {
+                        let _ = events.send(SessionEvent::StreamFailed {
+                            identity,
+                            reason: "ring buffer lock poisoned".to_string(),
+                        });
+                        break;
+                    }
                 }
             }
             Ok(AudioSourceEvent::Idle) => {}
@@ -190,6 +227,7 @@ mod tests {
     use super::StreamCapture;
     use crate::clock::SessionZero;
     use crate::event::SessionEvent;
+    use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::broadcast;
     use transcriber_audio::{
@@ -222,7 +260,8 @@ mod tests {
             panic!("spawning a capture thread must not fail");
         };
 
-        let Ok(()) = capture.request_stop_and_join() else {
+        capture.signal_stop();
+        let Ok(()) = capture.join() else {
             panic!("a freshly spawned thread must join cleanly");
         };
 
@@ -231,6 +270,47 @@ mod tests {
 
         capture.zeroize();
         assert!(capture.all_zero());
+    }
+
+    /// A `StreamCapture` dropped *without* ever calling `signal_stop`/`join`
+    /// — a panic between `Session::start` and `stop`, or an early
+    /// `?`-return in a caller — must still stop its thread and zero its
+    /// buffer. Uses an *unbounded* tone (no `with_total_frames`): only
+    /// `Drop`, never the source running out of frames on its own, can be
+    /// responsible for the thread stopping here.
+    #[test]
+    fn dropping_without_stop_still_stops_the_thread_and_zeroes_the_buffer() {
+        let source = TestToneSource::new(StreamIdentity::Remote, format(), 440.0);
+        let Ok(capture) = StreamCapture::spawn(
+            StreamIdentity::Remote,
+            Box::new(source),
+            SessionZero::record(),
+            events(),
+        ) else {
+            panic!("spawning a capture thread must not fail");
+        };
+
+        // Wait for the first frame — the synthetic tone never blocks on
+        // `pull`, so this settles almost immediately.
+        while capture.elapsed() == Duration::ZERO {
+            std::thread::yield_now();
+        }
+        let ring = Arc::clone(&capture.ring);
+        assert!(
+            !capture.all_zero(),
+            "sanity: real audio must have been captured before drop"
+        );
+
+        drop(capture);
+
+        let all_zero = match ring.lock() {
+            Ok(ring) => ring.all_zero(),
+            Err(poisoned) => poisoned.into_inner().all_zero(),
+        };
+        assert!(
+            all_zero,
+            "dropping a StreamCapture without an explicit stop() must still zero its buffer"
+        );
     }
 
     /// A source that always discloses the AEC degradation — proves
@@ -275,7 +355,8 @@ mod tests {
             Some(SourceDegradation::EchoCancellationUnavailable)
         );
 
-        let Ok(()) = capture.request_stop_and_join() else {
+        capture.signal_stop();
+        let Ok(()) = capture.join() else {
             panic!("a freshly spawned thread must join cleanly");
         };
     }

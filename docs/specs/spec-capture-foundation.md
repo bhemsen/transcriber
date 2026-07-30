@@ -865,3 +865,65 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     dieses Issues nennt das nicht, und das nächste Issue (`cli`,
     „Pro-Strom-Statistik") entscheidet mit eigenem Kontext, welche Form der
     Leser-Zugriff dafür braucht, statt dass dieses Issue rät.
+  - Ein Review vor dem Merge (frischer Agent, Opus) deckte zwei echte
+    Lebenszyklus-Fehler auf, beide vor dem Merge behoben:
+    - **Der Fund:** `StreamCapture` hatte keinen `Drop`-Impl. Eine `Session`,
+      die ohne `stop()` fallen gelassen wird — ein Panic zwischen `start` und
+      `stop`, ein früher `?`-Rückgabepfad eines Aufrufers — ließ den
+      Capture-Thread unentwegt weiterlaufen (die `Arc`s hielten `RingBuffer`
+      am Leben) und nullte nie. Belegt durch einen reproduzierten Lauf: 12
+      auf 40 gepullte Frames 150 ms nach dem Fallenlassen, in einem Puffer,
+      den keine API mehr erreichte. Behoben durch `impl Drop for
+      StreamCapture`, das `signal_stop` → `join` → `zeroize` idempotent
+      nachzieht — belegt durch
+      `capture::tests::dropping_without_stop_still_stops_the_thread_and_zeroes_the_buffer`
+      mit einer *unbegrenzten* Testton-Quelle, damit nur `Drop`, nie ein
+      erschöpfter Frame-Vorrat, für das Thread-Ende verantwortlich sein
+      kann.
+    - **Der Fund:** `Session::request_stop` signalisierte und jointe jeden
+      Strom **sequentiell** über `?` — panicte `remote`s Thread, kehrte die
+      Methode zurück, **bevor** `local`s Stop-Flag je gesetzt wurde. Der
+      Zustand steht dann bereits auf `Stopping` (nicht wiederholbar über
+      `request_stop`), aber `end()` wird akzeptiert und nullt einen Puffer,
+      in den `local` noch aktiv schreibt — die Akzeptanz-Zusage „nach `stop`
+      ist kein Sample mehr auffindbar" gilt auf diesem Pfad nicht. Belegt
+      durch einen reproduzierten Lauf: lokaler Pull-Zähler 19 → 47 in
+      150 ms nach einem `request_stop`, der bereits `Err` zurückgegeben
+      hatte. Behoben durch Aufspalten von `StreamCapture::request_stop_and_join`
+      in `signal_stop` (kann nicht fehlschlagen) und `join`
+      (blockierend, fehlerbehaftet): `Session::request_stop` signalisiert
+      jetzt **jeden** Strom, bevor es **irgendeinen** joint, und meldet den
+      ersten Fehler erst, nachdem alle Joins gelaufen sind — belegt durch
+      `session::tests::request_stop_still_stops_local_even_when_remote_panics`
+      (eine panische `Remote`-Quelle, ein unbegrenzter `Local`-Strom, dessen
+      `elapsed()` sich nachweislich nicht mehr ändert, sobald `request_stop`
+      zurückkehrt). Nebenbefund: dieselbe Umstellung entfernt die zuvor
+      sequentielle Stop-Latenz von bis zu `2 × PULL_TIMEOUT` auf einen
+      parallel signalisierten, nur noch einmal seriell gejointen Ablauf.
+    - Zwei weitere, kleinere Korrekturen aus derselben Runde: die
+      Tick-Arithmetik in `clock.rs::normalize` nutzt jetzt
+      `saturating_sub`/`saturating_mul` statt ungeprüfter `i64`-Subtraktion
+      auf geräteseitig gelieferten Werten (erreichbar außerhalb von Tests);
+      und ein vergifteter Ring-Mutex in `capture_loop` meldet jetzt
+      `SessionEvent::StreamFailed`, statt den Thread stillschweigend zu
+      beenden — die beiden anderen Exit-Pfade der Schleife meldeten immer
+      schon ein Ereignis, dieser tat es nicht.
+    - Zwei Doc-Kommentare behaupteten etwas, was der Code nicht (mehr) tat:
+      `tests/consent_gate.rs` behauptete, es gebe bewusst **keine**
+      `.stderr`-Datei — es gibt eine, `trybuild` akzeptiert `compile_fail`
+      ohne sie nur als „wip" und schlägt fehl. Und die Behauptung, die
+      Konstruktionszeilen der `compile_fail`-Fixture seien mit
+      `tests/session_lifecycle.rs` „wortgleich" geteilt, war falsch — beide
+      Dateien enthielten unabhängige Kopien, die Fixture zusätzlich mit
+      `.unwrap()` statt des sonst durchgehaltenen `let ... else { panic!()
+      }`-Musters (dort kein Clippy-Verstoß, weil `tests/compile_fail/` kein
+      eigenes Test-Target ist, aber ein Bruch der Konvention). Beide
+      Kommentare korrigiert, die Fixture auf `let-else` umgestellt.
+  - `session` steht nicht in `xtask::audit::GUARDED_CRATES` (nur `audio`,
+    `audio-win`, `asr`, `diarize` — die Liste, die `docs/constitution.md`
+    beim Namen nennt). Bewusst nicht in diesem Issue ergänzt: die Spec
+    dieser Phase listet den Audit-Test nicht unter den Akzeptanzkriterien
+    dieses Issues, und `session` hat heute keinen Schreibpfad. Festgehalten
+    als offene Frage für die Planung, nicht stillschweigend entschieden:
+    `session` besitzt ab jetzt jeden Ringpuffer mit live-PCM und verdient
+    denselben Audit-Schutz wie die vier gelisteten Crates.

@@ -52,10 +52,16 @@ impl StreamClock {
 
     /// Normalises `timestamp` to a duration since the session's zero,
     /// anchoring this stream's device-zero tick on the first call.
+    ///
+    /// Uses saturating arithmetic throughout: `timestamp` is device-supplied
+    /// and reachable from the non-test capture path, so a plain `-`/`*`
+    /// that could panic on overflow (a backend reporting a tick before its
+    /// own reported zero, however unexpected) has no place here.
     pub(crate) fn normalize(&mut self, timestamp: DeviceTimestamp) -> Duration {
         let zero_ticks = *self.device_zero_ticks.get_or_insert(timestamp.ticks());
-        let delta_ticks = (timestamp.ticks() - zero_ticks).max(0);
-        self.anchor_elapsed + Duration::from_nanos((delta_ticks as u64) * 100)
+        let delta_ticks = timestamp.ticks().saturating_sub(zero_ticks).max(0);
+        let delta_nanos = (delta_ticks as u64).saturating_mul(100);
+        self.anchor_elapsed + Duration::from_nanos(delta_nanos)
     }
 }
 

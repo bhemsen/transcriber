@@ -2,11 +2,12 @@
 //! via `TestToneSources` (issue #7) — the only way anything here runs on a
 //! CI runner with no audio device (spec, risk table).
 //!
-//! `build_plan` here is reused, line for line, by
-//! `tests/compile_fail/session_requires_consent_attestation.rs` — so a typo
-//! in that construction code would already fail *this* file first, not the
+//! `build_plan` here mirrors the construction in
+//! `tests/compile_fail/session_requires_consent_attestation.rs`, exercised
+//! under ordinary test tooling — a mistake in that construction pattern
+//! would surface as an ordinary failure here, not hide inside the
 //! compile_fail fixture, which must fail to compile for exactly one reason:
-//! the missing `ConsentAttestation`.
+//! a `()` where a `ConsentAttestation` belongs.
 
 use std::time::SystemTime;
 
