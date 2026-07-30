@@ -258,6 +258,7 @@ name = "transcriber-audio-win"
 version = "0.1.0"
 dependencies = [
  "sysinfo",
+ "thiserror",
  "transcriber-audio",
  "transcriber-core",
  "wasapi",

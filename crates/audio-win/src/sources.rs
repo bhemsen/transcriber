@@ -1,11 +1,17 @@
 //! The one edge module in this crate: everything that actually calls into
-//! `wasapi` or `sysinfo` lives here, over the pure functions in
-//! [`crate::process_tree`] and [`crate::sessions`].
+//! `wasapi` or `sysinfo` lives here (this file) or in its
+//! [`loopback_client`] submodule — split out purely to keep both files
+//! under the constitution's 400-line-per-module guideline, not a second
+//! edge — over the pure functions in [`crate::process_tree`],
+//! [`crate::sessions`] and [`crate::loopback`].
 //!
-//! Not exercised by any test in this issue — the spec's risk table notes
-//! `windows-latest` CI runners have no audio device, so this module gets
-//! compile checks only; [`crate::process_tree`] and [`crate::sessions`]
+//! Only [`loopback_client::LoopbackSource`]'s methods are exercised by a
+//! real capture path — the spec's risk table notes `windows-latest` CI
+//! runners have no audio device, so this edge gets compile checks only;
+//! [`crate::process_tree`], [`crate::sessions`] and [`crate::loopback`]
 //! carry the real, device-free logic tests.
+
+mod loopback_client;
 
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
@@ -14,18 +20,18 @@ use transcriber_audio::{AudioSource, SourceFactory, SourceFactoryError};
 use transcriber_core::{CaptureSubject, StreamIdentity};
 use wasapi::{Device, DeviceEnumerator, Direction};
 
-use crate::process_tree::ProcessSnapshot;
+use crate::process_tree::{ProcessSnapshot, identity_still_matches};
 use crate::sessions::{RenderSession, SessionActivity, active_capture_subjects};
+use loopback_client::LoopbackSource;
 
 /// The Windows [`SourceFactory`]: enumerates applications with an active
-/// render stream via WASAPI and `sysinfo`.
+/// render stream via WASAPI and `sysinfo`, and opens the `Remote` loopback
+/// stream for one of them.
 ///
-/// Only [`SourceFactory::list_subjects`] is implemented so far. `open_remote`
-/// (issue #12, real loopback capture and the identity re-check via
-/// [`crate::identity_still_matches`]) and `open_local` (issue #13,
-/// microphone capture with echo cancellation) each return an explicit
-/// [`SourceFactoryError::Open`] rather than a value that looks like a
-/// working stream.
+/// [`SourceFactory::list_subjects`] and [`SourceFactory::open_remote`] are
+/// implemented. `open_local` (issue #13, microphone capture with echo
+/// cancellation) still returns an explicit [`SourceFactoryError::Open`]
+/// rather than a value that looks like a working stream.
 #[derive(Debug, Default)]
 pub struct WindowsSources;
 
@@ -51,12 +57,15 @@ impl SourceFactory for WindowsSources {
 
     fn open_remote(
         &self,
-        _subject: &CaptureSubject,
+        subject: &CaptureSubject,
     ) -> Result<Box<dyn AudioSource>, SourceFactoryError> {
-        Err(SourceFactoryError::Open {
-            identity: StreamIdentity::Remote,
-            reason: "Windows loopback capture is not implemented yet (issue #12)".to_string(),
-        })
+        verify_subject_identity(subject)?;
+        let source =
+            LoopbackSource::open(subject.root_pid()).map_err(|error| SourceFactoryError::Open {
+                identity: StreamIdentity::Remote,
+                reason: error.to_string(),
+            })?;
+        Ok(Box::new(source))
     }
 
     fn open_local(&self) -> Result<Option<Box<dyn AudioSource>>, SourceFactoryError> {
@@ -65,6 +74,32 @@ impl SourceFactory for WindowsSources {
             reason: "Windows microphone capture is not implemented yet (issue #13)".to_string(),
         })
     }
+}
+
+/// Re-checks `subject`'s process identity against a fresh process-table
+/// lookup, failing loudly on a mismatch rather than opening whatever
+/// process now sits at that PID — Windows recycles PIDs, and the spec calls
+/// a mismatch here "a consent breach, not just a bug" (Windows-backend
+/// prior decisions). A PID with no current process-table entry at all (the
+/// process exited) is treated the same as a mismatch: there is nothing left
+/// to re-identify.
+fn verify_subject_identity(subject: &CaptureSubject) -> Result<(), SourceFactoryError> {
+    let processes = process_snapshots();
+    let still_matches = processes
+        .get(&subject.root_pid())
+        .is_some_and(|process| identity_still_matches(subject, &process.name, process.started_at));
+    if still_matches {
+        return Ok(());
+    }
+    Err(SourceFactoryError::Open {
+        identity: StreamIdentity::Remote,
+        reason: format!(
+            "process at PID {} no longer matches '{}' as consented to at listing time \
+             (recycled PID or the process exited)",
+            subject.root_pid(),
+            subject.process_name(),
+        ),
+    })
 }
 
 /// Wraps any failure from this module's WASAPI calls into the one

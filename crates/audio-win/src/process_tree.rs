@@ -106,8 +106,9 @@ pub(crate) fn resolve_tree_root(pid: u32, processes: &HashMap<u32, ProcessSnapsh
 /// mismatch means that PID now names a different process than the one the
 /// user consented to — capturing it anyway would be a consent breach, not
 /// just a bug (the spec's own wording for exactly this check). Exposed as
-/// part of this crate's public surface for `open_remote`'s future
-/// implementation (issue #12) to call between listing and opening.
+/// part of this crate's public surface for `open_remote`'s
+/// `verify_subject_identity` (`crate::sources`, issue #12) to call between
+/// listing and opening.
 #[must_use]
 pub fn identity_still_matches(
     subject: &CaptureSubject,

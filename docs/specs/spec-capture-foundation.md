@@ -804,3 +804,74 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     Issue nicht mehr wahr. Aktualisiert auf einen Verweis auf
     `CaptureSubject::started_at` und `identity_still_matches`, damit #12
     keine bereits überflüssige Umgehung baut.
+- 2026-07-30: Issue #12 (`audio-win`-Loopback-Erfassung, `open_remote`) legt
+  eine Entscheidung fest, die kein am 2026-07-30 geprüfter `wasapi`-Quelltext
+  aufgedeckt hatte, weil sie nicht die Sicherheit eines einzelnen Aufrufs
+  betrifft, sondern die Komposition der zurückgegebenen Typen mit einem
+  bereits fixierten Trait aus einer anderen Crate:
+  - **Der Fund:** `wasapi::AudioClient`, `AudioCaptureClient` und `Handle`
+    kapseln je einen rohen COM- bzw. Win32-Zeiger
+    (`windows_core::IUnknown`s `NonNull<c_void>`, `HANDLE`s `*mut c_void`)
+    ohne `Send`-Implementierung — geprüft nicht durch Lektüre, sondern durch
+    den tatsächlichen Compiler-Fehler beim ersten Bauversuch
+    (`` `NonNull<c_void>` cannot be sent between threads safely ``). `audio`s
+    `AudioSource: Send` (Issue #7, bereits gemergt, nicht Gegenstand dieses
+    Issues) verlangt aber `Send` von jedem Typ, der das Trait implementiert
+    — unabhängig davon, ob eine konkrete Sitzung die Quelle je über einen
+    Thread hinweg bewegt. Ohne Gegenmaßnahme bräuchte ein direktes Halten
+    dieser drei Felder in einem `LoopbackSource`-Typ ein
+    `unsafe impl Send for LoopbackSource {}` — genau die Ausnahme, die
+    `#![forbid(unsafe_code)]` in `audio-win` verbietet und die laut Auftrag
+    dieses Issues eskaliert werden muss, statt sie selbst zu ziehen.
+  - **Die Auflösung, ohne die Ausnahme zu ziehen:** die drei nicht-`Send`
+    WASAPI-Objekte leben vollständig auf einem einzigen, von
+    `LoopbackSource::open` gestarteten Worker-Thread (`sources::
+    loopback_client::run_worker`) und verlassen ihn nie — sie werden dort
+    erzeugt, dort gelesen, dort fallengelassen. `LoopbackSource` selbst
+    (der Typ, der `AudioSource` implementiert und die Trait-Grenze
+    überschreitet) hält nur noch Kanal-Enden
+    (`SyncSender<Duration>`/`Receiver<Result<AudioSourceEvent, String>>`)
+    und reine Daten — beides `Send` aus eigenem Recht, ganz ohne
+    `unsafe`. `pull` schickt seinen `timeout` über einen
+    Rendezvous-Kanal (`sync_channel(0)`, kein Puffer über ein Element
+    hinaus) an den Worker und blockiert auf die Antwort; das hält die
+    „kein unbegrenzter Puffer"-Zusage dieser Phase auch über die
+    Thread-Grenze hinweg ein, nicht nur innerhalb eines `pull`-Aufrufs.
+  - Diese Form macht `initialize_mta() runs on each capture thread`
+    (Akzeptanzkriterium dieses Issues) strukturell wahr, statt es durch
+    einen defensiven Aufruf in jedem `pull()` zu erzwingen: der Worker-Thread
+    *ist* jetzt der Erfassungs-Thread, lebt für die gesamte Lebensdauer der
+    Quelle, und ruft `initialize_mta()` genau einmal, an seinem Anfang, vor
+    jedem weiteren WASAPI-Aufruf.
+  - Beim Sitzungsende (`Drop for LoopbackSource`) wird zuerst der
+    Request-Sender auf `None` gesetzt (schließt den Kanal, der Worker
+    verlässt seine `recv()`-Schleife) und danach der Thread über
+    `JoinHandle::join` eingesammelt — in dieser Reihenfolge, sonst blockiert
+    `join()` auf einem Worker, der auf eine Nachricht wartet, die nie kommt.
+    Begrenzt durch das jeweils laufende `pull`-Timeout, falls der Worker
+    genau in `wait_for_event` hängt; nie unbegrenzt, weil dieser Aufruf selbst
+    immer spätestens nach seinem Timeout zurückkehrt.
+  - `get_next_packet_size()` bleibt die einzige Quelle der Chunk-Größe,
+    `get_buffer_size()` wird nirgends aufgerufen; alle drei `BufferFlags`
+    werden über die reinen Funktionen in `crate::loopback`
+    (`frame_for_packet`, mit `data_discontinuity` vor `timestamp_error`
+    geprüft, falls beide je gleichzeitig gesetzt wären) auf getrennte
+    Zähler abgebildet, `silent` wird unabhängig vom tatsächlichen
+    Puffer-Inhalt als Nullen materialisiert. Diese Zuordnung, die
+    Byte-Dekodierung (`bytes_to_f32_samples`) und die Timeout-Umrechnung
+    (`timeout_millis`) sind das gerätefreie Kernstück dieses Issues und
+    tragen alle Logiktests; die WASAPI-Kanten (`OpenClient`, `run_worker`,
+    `LoopbackSource`) bekommen wie von der Spec vorgesehen nur
+    Compile-Prüfung.
+  - `sources.rs` wurde aufgeteilt: die WASAPI-Kante für die
+    Loopback-Erfassung (`LoopbackSource`, `OpenClient`, `run_worker`) liegt
+    jetzt in `sources/loopback_client.rs`, damit beide Dateien unter der
+    400-Zeilen-Grenze der Constitution bleiben — dieselbe Begründung, die
+    Issue #8 schon für den Audit-Test dokumentiert hat. Weiterhin **eine**
+    Erfassungs-Kante im Sinn der Architektur, nur auf zwei Dateien verteilt.
+  - `identity_still_matches` (Issue #11) ist jetzt über
+    `verify_subject_identity` (`sources.rs`) tatsächlich verdrahtet: ein
+    frischer `sysinfo`-Scan zum Zeitpunkt von `open_remote`, verglichen
+    gegen `subject`; ein fehlender Prozess an der gemerkten `root_pid` zählt
+    als Mismatch, nicht als Sonderfall — es gibt nichts mehr zu
+    identifizieren. `open_local`s Stub bleibt unverändert (Issue #13).
