@@ -1121,31 +1121,74 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     damit beide auf einem geräte­losen CI-Runner testbar bleiben. Das
     Modul `crate::loopback` bleibt unbenannt — die Umbenennung auf einen
     generischeren Namen hätte Issue #12s bereits gemergten Code berührt,
-    ohne dass dieses Issue das bräuchte.
+    ohne dass dieses Issue das bräuchte. Die WASAPI-Kante selbst ist auf
+    zwei Dateien verteilt (`sources/microphone_client.rs` und
+    `sources/microphone_client/open_client.rs`), aus demselben
+    400-Zeilen-Grund, den Issue #12 schon für `sources.rs` dokumentiert hat.
   - **Die Abwesenheits-Erkennung ist ein Integer-Vergleich, kein
     `wasapi`-Typ-Vergleich:** `microphone_absent(hresult: i32)` vergleicht
     gegen `0x8007_0490` (`HRESULT_FROM_WIN32(ERROR_NOT_FOUND)`), das
     dokumentierte `E_NOTFOUND`, das `IMMDeviceEnumerator::
     GetDefaultAudioEndpoint` liefert, wenn kein Gerät der angefragten
     Rolle/Richtung existiert. Rechnerisch aus der Win32-HRESULT-Formel
-    hergeleitet und gegen die Konstante getestet (nicht empirisch an einem
-    Rechner ohne Mikrofon beobachtet — dafür gibt es in dieser Umgebung
-    kein Gerät, das sich sitzungsweise abstecken ließe). Ein zweiter Test
-    belegt, dass ein anderer HRESULT-Wert (`E_ACCESSDENIED`, der Fall der
-    Human-Prerequisite „Mikrofon-Datenschutzeinstellung aus") **nicht**
-    als Abwesenheit missverstanden wird, sondern als echter Fehler
-    durchschlägt — genau die Unterscheidung, die die Spec fordert.
+    hergeleitet und im Test (`FACILITY_WIN32 << 16 | 0x8000_0000 |
+    ERROR_NOT_FOUND`) unabhängig von der Implementierungs-Konstante neu
+    zusammengesetzt, nicht nur derselbe Literal doppelt hingeschrieben —
+    ein Review vor dem Merge deckte auf, dass eine erste Testfassung genau
+    das tat und damit eine vertauschte Ziffer in der Konstante nie hätte
+    auffangen können. Nicht empirisch an einem Rechner ohne Mikrofon
+    beobachtet — dafür gibt es in dieser Umgebung kein Gerät, das sich
+    sitzungsweise abstecken ließe. Ein zweiter Test belegt, dass ein
+    anderer HRESULT-Wert (`E_ACCESSDENIED`) nicht als Abwesenheit
+    missverstanden wird, sondern als echter Fehler durchschlägt; die
+    Windows-Mikrofon-Datenschutzeinstellung selbst durchläuft diesen
+    Vergleich in der Praxis gar nicht — sie schlägt erst später, an
+    `IAudioClient::Initialize`, fehl und damit ohnehin als gewöhnlicher
+    `Err` in `OpenClient::open`.
   - **Ein Fehler in der AEC-Kette nach einer `true`-Probe wird nicht als
     zweite Degradierung gefaltet, sondern als echter Fehler behandelt:**
     Die Spec entscheidet „`is_aec_supported() == false`" → warnen und
-    weiterlaufen. Schlägt danach `get_aec_control()`, die
-    Render-Geräte-Auflösung oder `set_echo_cancellation_render_endpoint`
-    fehl — z. B. ein Rechner ganz ohne Wiedergabegerät —, ist das eine
+    weiterlaufen. Schlägt danach `get_aec_control()` oder
+    `set_echo_cancellation_render_endpoint` fehl, ist das eine
     Inkonsistenz, die die Spec nicht adressiert, kein zweiter Fall von
     „AEC fehlt". Bewusst als `Err` durchgereicht statt stillschweigend zu
     `EchoCancellationUnavailable` heruntergestuft, damit ein echtes
     Plattformproblem sichtbar bleibt statt hinter einer normal aussehenden
-    Degradierung zu verschwinden. Als Randfall dokumentiert, nicht als
-    neues Issue — betrifft eine Rechnerkonfiguration (Mikrofon vorhanden,
-    kein Wiedergabegerät), die die Human-Prerequisites dieser Phase nicht
-    vorsehen.
+    Degradierung zu verschwinden.
+- 2026-07-30: Ein Review vor dem Merge (frischer Agent, Opus) deckte zwei
+  echte Fehler in der AEC-Kette auf, beide vor dem Merge behoben, plus die
+  oben schon eingearbeitete Test-Schwäche:
+  - **Der erste Fund:** Der ursprüngliche Entwurf löste den
+    Referenz-Wiedergabegerät für `set_echo_cancellation_render_endpoint`
+    über `enumerator.get_default_device(&Direction::Render)` auf — das
+    `Console`-Rollen-Standardgerät, exakt wie im geprüften `wasapi`-Beispiel
+    (`examples/aec.rs`). Aber dieselbe Funktion wählt auf der Aufnahmeseite
+    bewusst `Role::Communications`, mit der Begründung „das Gerät, das der
+    Call-Client selbst benutzt" (Issue-Text). Dieselbe Begründung gilt für
+    die Wiedergabeseite genauso, und es gibt keine Zusicherung, dass beide
+    Rollen auf dasselbe physische Gerät zeigen (z. B. Desktop-Lautsprecher
+    als Communications-Standard, ein zweiter DAC als Console-Standard).
+    Zeigt die AEC-Referenz auf das falsche Gerät, kompensiert sie nichts,
+    während `is_aec_supported()` weiterhin `true` meldet und
+    `degradation()` `None` bleibt — der Nutzer bekäme keine Warnung für
+    genau den Fall, den dieses Issue lösen soll. Behoben, indem
+    `enable_echo_cancellation` `None` an
+    `set_echo_cancellation_render_endpoint` übergibt, statt selbst ein
+    Gerät zu wählen — laut `wasapi`-Doc-Kommentar wählt Windows dann selbst
+    das Referenzgerät.
+  - **Der zweite, unabhängige Fund, der dieselbe Korrektur zusätzlich
+    erzwingt:** `wasapi` 0.23.0s eigene
+    `set_echo_cancellation_render_endpoint`-Implementierung
+    (`src/api.rs:1898-1912`) baut im `Some(id)`-Zweig ein `HSTRING` aus der
+    übergebenen `String`, nimmt per `.as_ptr()` einen rohen `PCWSTR`
+    heraus und übergibt ihn erst in der **nächsten** Anweisung an den
+    COM-Aufruf — das `HSTRING` selbst ist zu diesem Zeitpunkt aber bereits
+    freigegeben (Rusts Temporary-Scope-Regel verlängert seine Lebensdauer
+    nicht über `.as_ptr()` hinweg). Ein waschechter Dangling-Pointer-Bug in
+    der gepinnten Abhängigkeit selbst, nur auf dem `Some`-Zweig erreichbar
+    — nicht durch Lektüre vermutet, sondern am Quelltext nachvollzogen.
+    Dieselbe Korrektur wie oben (immer `None` übergeben) umgeht ihn
+    vollständig, weil dieser Zweig dann nie gebaut wird. Im
+    Doc-Kommentar von `enable_echo_cancellation` festgehalten, direkt neben
+    der Versions-Pinnung auf `0.23.x`, damit ein künftiger Versions-Bump
+    prüft, ob der Bug behoben wurde, statt ihn erneut zu entdecken.

@@ -22,13 +22,25 @@ fn aec_unsupported_discloses_echo_cancellation_unavailable() {
 
 #[test]
 fn the_documented_no_default_device_hresult_is_recognised_as_absent() {
-    assert!(microphone_absent(0x8007_0490_u32 as i32));
+    // Derived from the Win32 HRESULT formula rather than repeating the
+    // implementation's own literal, so a transposed digit in either place
+    // would be caught: HRESULT_FROM_WIN32(ERROR_NOT_FOUND) ==
+    // (FACILITY_WIN32 << 16) | 0x8000_0000 | ERROR_NOT_FOUND.
+    const FACILITY_WIN32: u32 = 7;
+    const ERROR_NOT_FOUND: u32 = 1168;
+    let e_notfound = ((FACILITY_WIN32 << 16) | 0x8000_0000 | ERROR_NOT_FOUND) as i32;
+    assert!(microphone_absent(e_notfound));
 }
 
 #[test]
 fn an_unrelated_hresult_is_not_mistaken_for_an_absent_microphone() {
-    // E_ACCESSDENIED (0x80070005) - the spec's other named human
-    // prerequisite (the Windows microphone privacy toggle switched off) —
-    // must surface as a real failure, not be swallowed as "no microphone".
+    // E_ACCESSDENIED (0x80070005) - a different real failure than "no
+    // device", used here only to prove the classifier is an exact match on
+    // the one documented code, not a loose "any Win32 HRESULT counts as
+    // absent" heuristic. (The Windows microphone privacy toggle, this
+    // phase's other human prerequisite, actually fails later — at
+    // `IAudioClient::Initialize` — so it never reaches this classifier at
+    // all; it surfaces as an ordinary `Err` from a later step in
+    // `OpenClient::open`, not via this comparison.)
     assert!(!microphone_absent(0x8007_0005_u32 as i32));
 }
