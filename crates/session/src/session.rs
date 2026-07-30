@@ -39,6 +39,17 @@ pub struct Session {
     remote: StreamCapture,
     local: Option<StreamCapture>,
     events: broadcast::Sender<SessionEvent>,
+    /// The receiver `broadcast::channel` handed back when `events` was
+    /// created in [`Session::start`], held onto until the first
+    /// [`Session::subscribe`] call claims it. `start` itself may already
+    /// have published [`SessionEvent::MicrophoneUnavailable`] or
+    /// [`SessionEvent::StreamDegraded`] before any caller could possibly
+    /// have subscribed — `broadcast` never buffers for a receiver created
+    /// *after* a send, so without this, those two events could never reach
+    /// any subscriber at all. `None` once claimed; every later call falls
+    /// back to an ordinary `events.subscribe()`, which only sees events
+    /// published from that point on.
+    startup_receiver: Option<broadcast::Receiver<SessionEvent>>,
 }
 
 impl Session {
@@ -57,7 +68,7 @@ impl Session {
     pub fn start(consent: ConsentAttestation, plan: CapturePlan) -> Result<Self, SessionError> {
         let (subject, remote_source, local_source) = plan.into_parts();
         let session_zero = SessionZero::record();
-        let (events, _receiver) = broadcast::channel(EVENT_BUS_CAPACITY);
+        let (events, startup_receiver) = broadcast::channel(EVENT_BUS_CAPACITY);
 
         let remote = StreamCapture::spawn(
             StreamIdentity::Remote,
@@ -77,6 +88,7 @@ impl Session {
             remote,
             local,
             events,
+            startup_receiver: Some(startup_receiver),
         })
     }
 
@@ -160,9 +172,20 @@ impl Session {
     /// (`tokio::sync::broadcast::Sender::send`) never needs a running
     /// tokio runtime, but *receiving* asynchronously does — no runtime is
     /// entered anywhere on the capture path itself.
+    ///
+    /// The *first* call ever made on a given `Session` claims
+    /// [`Self::startup_receiver`] — the one receiver present before
+    /// `Session::start` returned — and therefore also sees any
+    /// [`SessionEvent::MicrophoneUnavailable`] or
+    /// [`SessionEvent::StreamDegraded`] `start` already published.
+    /// Every later call gets an ordinary fresh receiver, which — as with
+    /// any `broadcast` receiver — only sees events published after it was
+    /// created.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<SessionEvent> {
-        self.events.subscribe()
+    pub fn subscribe(&mut self) -> broadcast::Receiver<SessionEvent> {
+        self.startup_receiver
+            .take()
+            .unwrap_or_else(|| self.events.subscribe())
     }
 
     /// Moves `Capturing -> Stopping`: signals every capture thread to stop,

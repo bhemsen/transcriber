@@ -991,3 +991,42 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   (die Happens-before-Kette bezieht sich auf die *Freigabe*, nicht den
   *Erwerb*, von `position`, und gilt nur, solange ein Leser dieselbe
   Reihenfolge einhält — jetzt so benannt).
+- 2026-07-30: Eine vierte Review-Runde (frischer Agent, Opus) prüfte die
+  gesamte PR noch einmal von vorn, nicht nur den letzten Patch, und deckte
+  einen Fund auf, den keine der drei vorherigen Runden sah: **zwei der
+  fünf `SessionEvent`-Varianten waren strukturell unzustellbar.**
+  `MicrophoneUnavailable` und `StreamDegraded` werden ausschließlich
+  innerhalb von `Session::start` gesendet — bevor `start` zurückkehrt und
+  damit bevor irgendein Aufrufer `Session::subscribe` überhaupt hätte
+  rufen können. `tokio::sync::broadcast` puffert nie für einen Empfänger,
+  der erst **nach** einem `send` entsteht; der ursprüngliche Empfänger aus
+  `broadcast::channel(..)` wurde in `start` sofort verworfen
+  (`let (events, _receiver) = ...`). Belegt durch eine Probe des Reviewers:
+  ein Abonnent direkt nach `start` sah eine leere Ereignisliste. Drei
+  Doc-Kommentare (auf `Session::start`, `Session::start_local` und
+  `SessionEvent::MicrophoneUnavailable` selbst) behaupteten das Gegenteil —
+  wieder die Doc-Drift-Klasse, die diese PR schon zweimal korrigiert hat,
+  dieses Mal aber am Verhalten selbst, nicht nur am Kommentar. Kein
+  Test deckte die Zustellung ab, nur die Zustands-Accessor (`has_local_stream`,
+  `*_degradation`), was den Fund unsichtbar hielt.
+
+  Von den drei vom Reviewer vorgeschlagenen Optionen (Startempfänger
+  aufheben und dem ersten Abonnenten geben; die beiden Sends aus `start`
+  herausziehen und erst bei der ersten Anmeldung nachliefern; die beiden
+  Varianten ganz entfernen und auf die längst vorhandenen, längst
+  getesteten Accessor verweisen) gewählt: **die erste.** `Session` trägt
+  jetzt `startup_receiver: Option<broadcast::Receiver<SessionEvent>>`, mit
+  dem in `start` erzeugten Empfänger befüllt; `subscribe(&mut self)`
+  (vorher `&self` — die Mutation, um ihn per `Option::take` zu entnehmen,
+  ist die einzige Signaturänderung) gibt ihn beim ersten Aufruf zurück und
+  fällt danach auf ein gewöhnliches `events.subscribe()` zurück. Gewählt
+  statt der beiden anderen Optionen, weil sie ohne neue Interna am
+  bestehenden `broadcast`-Kanal auskommt und die beiden Varianten als
+  eigenständige, dem Nutzer sichtbare Ereignisse erhält (Variante 3 hätte
+  das Vokabular verkleinert, das `docs/design.md`s künftiger
+  Konsent-/Status-Anzeige eventuell nützt). Belegt durch
+  `session::tests::the_first_subscriber_still_sees_an_event_published_during_start`
+  (per Falsifikation: mit der naiven `events.subscribe()`-Implementierung
+  schlägt der Test zuverlässig fehl, mit der Korrektur nicht mehr) — der
+  bestehende Test `a_missing_microphone_warns_instead_of_aborting` prüfte
+  weiterhin nur die Accessor, deckte die Zustellungslücke deshalb nie auf.

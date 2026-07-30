@@ -2,6 +2,7 @@
 //! `session.rs` under the constitution's 400-line-per-module ceiling.
 
 use super::Session;
+use crate::event::SessionEvent;
 use crate::plan::CapturePlan;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -95,6 +96,32 @@ fn a_missing_microphone_warns_instead_of_aborting() {
     assert_eq!(session.state(), SessionState::Capturing);
     assert!(!session.has_local_stream());
     assert!(session.local_degradation().is_none());
+}
+
+/// Regression test: `Session::start` can already publish
+/// [`SessionEvent::MicrophoneUnavailable`] before it returns — before any
+/// caller could possibly have called [`Session::subscribe`] yet.
+/// `tokio::sync::broadcast` never buffers a send for a receiver created
+/// afterwards, so without `Session` retaining its startup receiver and
+/// handing it to the first `subscribe()` call, this event could never
+/// reach *any* subscriber, no matter how quickly they subscribed.
+#[test]
+fn the_first_subscriber_still_sees_an_event_published_during_start() {
+    let factory = bounded_factory().without_microphone();
+    let mut session = started_session(&factory);
+
+    let mut receiver = session.subscribe();
+    let mut saw_microphone_unavailable = false;
+    while let Ok(event) = receiver.try_recv() {
+        if matches!(event, SessionEvent::MicrophoneUnavailable) {
+            saw_microphone_unavailable = true;
+        }
+    }
+    assert!(
+        saw_microphone_unavailable,
+        "the first subscriber must still observe an event Session::start \
+         already published before any subscriber could exist"
+    );
 }
 
 /// A source whose every `pull` panics — stands in for a capture thread
