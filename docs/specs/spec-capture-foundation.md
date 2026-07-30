@@ -452,3 +452,47 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     hält `push()` in O(1) unabhängig von der Leserzahl — der konkrete Mechanismus
     hinter der Spec-Zusage, dass der Fan-out an ASR und VAD in Phase 2/3 rein
     additiv wird, ohne den Ringpuffer selbst anzufassen.
+- 2026-07-30: Issue #8 (Quell-, Manifest- und Graph-Audit) legt drei
+  Detailentscheidungen fest, die die Spec offen ließ:
+  - Der Symbol-Scan normalisiert Whitespace vor dem Vergleich (alle
+    Leerraumzeichen entfernt), damit sowohl `std :: fs :: write` als auch
+    `use std::fs::write as w;` erkannt werden — Letzteres, weil der
+    `use`-Pfad selbst noch die volle qualifizierte Zeichenkette trägt, auch
+    wenn der spätere Aufruf nur den Alias `w(...)` nennt. Für
+    `OpenOptions::write` reicht das nicht: idiomatischer Code schreibt diesen
+    Pfad praktisch nie als eine zusammenhängende Kette, sondern
+    `OpenOptions::new()` und danach `.write(true)` als eigener
+    Builder-Schritt. Dafür gibt es eine zusätzliche Heuristik: Datei enthält
+    `OpenOptions` **und** `.write(` → Fund. Was der Scan bewusst nicht kann:
+    eine Cross-Crate-Umleitung erkennen, die den Pfad nie im Quelltext der
+    bewachten Crate selbst wiederholt (z. B. ein `impl Write` in einer
+    unbewachten Hilfs-Crate) — dafür ist der Graph-Check die zweite,
+    unabhängige Sicherung, aber nur für die drei Crate-Namen (`serde`,
+    `reqwest`, `ureq`), nicht für die beiden `fs`-Symbole, die keine Crate
+    sind. Der Audit scannt ausschließlich die vier fest benannten
+    Crate-Verzeichnisse aus `audit::GUARDED_CRATES`, niemals `xtask` selbst —
+    ein Selbsttest (`guarded_crates_never_include_the_audit_tool_itself`)
+    hält das dauerhaft fest, damit der Scan nie seine eigenen
+    String-Literale oder Fixtures als Fund meldet.
+  - Manifest- und Graph-Prüfung laufen als zwei getrennte Schichten über
+    dieselbe reine Funktion (`blocked_dependencies_in`): die Manifest-Schicht
+    liest `[dependencies]` aus der `Cargo.toml` der Crate direkt (Text-Parser
+    für die flache `name = "version"`-Form, die jede Crate hier aktuell
+    nutzt — eine `[dependencies.foo]`-Untertabelle würde nicht erkannt,
+    bewusst offengelegte Lücke statt stiller Annahme); die Graph-Schicht ruft
+    `cargo tree --offline -e normal,build` für das Crate auf und prüft den
+    **vollständigen transitiven** Abhängigkeitsbaum, damit auch eine indirekt
+    ankommende `serde`-Abhängigkeit auffällt. Beide Schichten brauchen keine
+    neue Abhängigkeit (kein `cargo_metadata`, kein `serde_json`) — `cargo
+    tree` ist ein in Cargo eingebauter Befehl, der Klartext statt JSON
+    liefert, also entfällt ein Eintrag in der `cargo-deny`-Allowlist.
+  - Der Test liegt bewusst nicht als `xtask/tests/audit.rs`, sondern als
+    `xtask/tests/no_write_paths.rs` (der Einstiegspunkt, von Cargo als
+    einziges Test-Target automatisch erkannt) plus
+    `xtask/tests/audit/mod.rs` (die reinen Detektoren mit ihren
+    Fixture-Tests, per `mod audit;` eingebunden). Ein `audit.rs` direkt unter
+    `tests/` hätte Cargo als **zweites, eigenständiges** Test-Target
+    entdeckt — die Fixture-Tests wären doppelt gelaufen und `audit`s
+    `pub(crate)`-Sichtbarkeit hätte über die Crate-Grenze hinweg nicht mehr
+    gegolten. Die `<name>/mod.rs`-Form ist das etablierte Muster für
+    geteilte Hilfsmodule in Integrationstests, genau um das zu vermeiden.
