@@ -1,0 +1,36 @@
+/target
+**/target
+/frontend/node_modules
+/frontend/dist
+node_modules
+
+# Model cache — models are downloaded on first run, never committed
+# (docs/constitution.md).
+/models
+*.bin
+*.onnx
+
+# Nothing audio-shaped may ever be committed. These patterns are a backstop, not
+# the mechanism: the architecture keeps `protocol` free of any dependency on
+# `audio`, so there is no code path that produces such a file in the first place.
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.opus
+*.m4a
+*.pcm
+*.raw
+
+# Local protocols, if a developer points the output directory into the repo.
+/protocols
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Claude Code local overrides (the shared settings.json IS committed)
+.claude/settings.local.json

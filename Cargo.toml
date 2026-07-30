@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/bhemsen/transcriber"
+authors = ["transcriber contributors"]
+
+# Opted into per crate via `[lints] workspace = true`. The platform backends
+# (audio-win, audio-mac, audio-linux) deliberately do NOT opt in, because they
+# need `unsafe` for the native audio APIs — see docs/constitution.md.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+too_many_lines = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
