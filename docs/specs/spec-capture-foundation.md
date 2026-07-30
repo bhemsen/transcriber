@@ -804,3 +804,64 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     Issue nicht mehr wahr. Aktualisiert auf einen Verweis auf
     `CaptureSubject::started_at` und `identity_still_matches`, damit #12
     keine bereits überflüssige Umgehung baut.
+- 2026-07-30: Issue #9 (`session`-Zustandsmaschine mit typseitigem
+  Consent-Gate) legt sechs Detailentscheidungen fest:
+  - `CapturePlan` trägt `subject: CaptureSubject`, `remote: Box<dyn
+    AudioSource>` (obligatorisch — `open_remote` liefert nie eine Absenz)
+    und `local: Option<Box<dyn AudioSource>>`, exakt `docs/architecture.md`s
+    Flow 1 ("die geöffneten `AudioSource`s (Mikrofon und
+    Prozessbaum-Loopback)"). `Session` besitzt pro Strom einen eigenen
+    Capture-Thread und einen `Arc<Mutex<RingBuffer>>`; eine Quelle
+    *produziert* nur über `pull`, ohne eigene Pufferung — die
+    Eigentums-Grenze aus der Issue-Vorgabe.
+  - Die gemeinsame Sitzungs-Null (`SessionZero`, in `clock.rs`) ist ein
+    `Instant`, den `Session::start` einmal aufzeichnet. Jeder Capture-Thread
+    verankert beim Start einen eigenen `StreamClock` darauf: die seit der
+    Sitzungs-Null vergangene Wanduhrzeit im Moment des Thread-Starts, plus —
+    ab dem ersten Frame — der Geräte-Tick-Nullpunkt dieses Stroms. Spätere
+    Frames normalisieren sich als Wanduhr-Anker plus vergangene Geräte-Ticks.
+    Damit tragen `Remote` und `Local` trotz unabhängiger Geräte-Uhren eine
+    vergleichbare, auf dieselbe Null bezogene Zeitachse — belegt durch einen
+    Test, der zwei zu unterschiedlichen Zeitpunkten verankerte Uhren für
+    denselben Geräte-Tick unterschiedliche, monoton größere Offsets liefern
+    lässt. `Session::elapsed(identity)` legt das Ergebnis offen (`None` nur
+    für `Local` ohne Mikrofon).
+  - `RingBuffer` (Crate `audio`) bekommt zwei neue Methoden, `zeroize()`
+    (füllt die Storage in-place mit `0.0`, keine Reallokation) und
+    `all_zero()` (reine Abfrage, gibt nie Samples zurück). Nötig, weil die
+    Akzeptanz dieses Issues explizit maschinell beweisen muss, dass nach
+    `stop()` kein Sample mehr auffindbar ist — `Zeroizing`s Nullen-bei-Drop
+    allein hätte das nicht *während* die `Session` noch erreichbar ist,
+    belegt. Eine crate-übergreifende Änderung, hier bewusst offengelegt statt
+    stillschweigend vollzogen; `audio` bleibt sonst unverändert.
+  - `Session::stop()` durchläuft real beide Kanten
+    (`request_stop` dann `end`) statt sie zu verschmelzen — ein Aufrufer ohne
+    Interesse am `Stopping`-Zwischenzustand bekommt die Bequemlichkeit einer
+    Methode, aber die Zustandsmaschine bleibt zweikantig und einzeln
+    aufrufbar (`request_stop`/`end` sind beide `pub`).
+  - Die Capture-Loop prüft `stop` **nach** jedem `pull`, nie davor: ein
+    Review-Fund während der Implementierung zeigte, dass ein `stop`, der die
+    Thread-Terminierung im Wettlauf mit deren allererster Ausführung
+    schlägt, sonst einen Strom mit bereits bereitstehenden Daten (die
+    Testton-Quelle mit `with_total_frames`) ganz ohne einen einzigen `pull`
+    beenden konnte — von außen ununterscheidbar von einer erfolgreich
+    genullten Sitzung, weil beide Male der Puffer nur Nullen zeigt. Behoben,
+    indem jede Iteration mindestens einen `pull` ausführt, bevor `stop`
+    geprüft wird.
+  - Der `trybuild`-`compile_fail`-Fall reicht bewusst `()` statt eines
+    fehlenden zweiten Arguments an `Session::start` — ein Typfehler (E0308)
+    statt eines Arity-Fehlers (E0061). E0061 trägt seit einigen
+    Rust-Versionen einen mehrzeiligen `help: provide the argument`-Block mit
+    Platzhalter-Kommentar, dessen genauer Wortlaut jünger und damit
+    wandelbarer ist als die knappe "expected X, found Y"-Form von E0308.
+    `tests/compile_fail/session_requires_consent_attestation.stderr` ist
+    eingecheckt (ohne eine Datei akzeptiert `trybuild` den Fall nur als
+    "wip" und schlägt fehl); ein künftiger Toolchain-Bump kann sie trotzdem
+    neu erzeugen müssen — der akzeptierte, in der ganzen `trybuild`-Literatur
+    übliche Preis fest gepinnter Compiler-Diagnosen.
+  - Zurückgestellt, kein Merge-Blocker: `Session` legt keine
+    Pro-Strom-Statistik (Verlustzahl, Discontinuity-/Timestamp-Error-Zähler)
+    offen und keinen Leser-Zugriff auf den Ringpuffer — die Spec-Akzeptanz
+    dieses Issues nennt das nicht, und das nächste Issue (`cli`,
+    „Pro-Strom-Statistik") entscheidet mit eigenem Kontext, welche Form der
+    Leser-Zugriff dafür braucht, statt dass dieses Issue rät.
