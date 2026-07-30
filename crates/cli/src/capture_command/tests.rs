@@ -50,8 +50,8 @@ fn refusing_consent_starts_no_session() {
     };
     assert!(outcome.is_none(), "refusal must not construct a Session");
     assert!(
-        output.contains('0'),
-        "the refusal notice must show 0 frames"
+        output.contains("Remote: 0 frames, Local: 0 frames"),
+        "the refusal notice must literally show both frame counters at 0, got: {output:?}"
     );
 }
 

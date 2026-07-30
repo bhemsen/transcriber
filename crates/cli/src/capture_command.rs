@@ -28,12 +28,22 @@ const STOP_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 /// Runs `capture --pid <pid>`: resolves the subject, gates on consent,
 /// opens both streams, then prints live statistics until the user presses
 /// Enter.
+///
+/// The consent prompt's stdin lock is dropped (the inner block ends)
+/// *before* [`run_capture_loop`] starts — [`spawn_stop_listener`] locks
+/// stdin again on its own thread, and `std::io::Stdin`'s lock is only
+/// reentrant *within* one thread. Holding the first lock across the loop
+/// would deadlock the stop listener against this function's own guard
+/// forever, and Enter would never be noticed.
 pub(crate) fn run(factory: &dyn SourceFactory, pid: u32, lang: Language) -> Result<(), CliError> {
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
     let mut stdout = std::io::stdout();
 
-    let Some(mut session) = resolve_and_start(factory, pid, lang, &mut input, &mut stdout)? else {
+    let outcome = {
+        let stdin = std::io::stdin();
+        let mut input = stdin.lock();
+        resolve_and_start(factory, pid, lang, &mut input, &mut stdout)?
+    };
+    let Some(mut session) = outcome else {
         return Ok(());
     };
 

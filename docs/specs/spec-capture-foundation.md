@@ -1494,3 +1494,38 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     abgespielten `.wav`-Datei genau eine — `PID … WindowsTerminal.exe`,
     aufgelöst über die bereits bekannte, nicht neu zu verhandelnde
     Shell-Wurzel-Ausnahme (siehe die Liste der bereits gerouteten Punkte).
+  - Ein Review vor dem Merge (frischer Agent, Opus) deckte einen echten,
+    schwerwiegenden Fund auf: **`capture` konnte nie durch Enter beendet
+    werden.** `capture_command::run` hielt `stdin.lock()` über den gesamten
+    Aufruf von `run_capture_loop` hinweg, während der Stop-Listener-Thread
+    einen **eigenen** `std::io::stdin().lock()`-Aufruf macht — `Stdin`s Lock
+    ist nur **innerhalb** eines Threads reentrant, über Threads hinweg blockt
+    der zweite Aufruf, bis der erste freigegeben wird. Der wartet aber bis
+    `run` zurückkehrt, was erst nach dem Stop-Signal passiert — ein echter,
+    vom Reviewer nachgestellter Deadlock. Konsequenz: der einzige dokumentierte
+    Stop-Weg funktionierte nie, `Session::stop()` und damit das explizite
+    Nullen der Puffer liefen auf keinem echten Lauf, und Ctrl+C (der einzig
+    verbleibende Ausweg) überspringt `Drop` — die Zeroize-Zusage der
+    Constitution war auf dem Produktpfad unerreichbar. Behoben, indem der
+    `stdin.lock()`-Guard in `run` auf einen inneren Block um
+    `resolve_and_start` beschränkt wird und vor dem Eintritt in
+    `run_capture_loop` freigegeben ist. Belegt durch einen erneuten
+    Smoke-Test gegen die echte Windows-Maschine: `capture --pid …` mit
+    `yes` bestätigt, sofort durch eine zweite stdin-Zeile beendet — lief
+    durch, druckte die Start- und die End-Statistik und beendete sich mit
+    Exit-Code 0, statt zu hängen.
+  - Dieselbe Runde deckte einen vakuosen Test auf:
+    `capture_command::tests::refusing_consent_starts_no_session` prüfte nur
+    `output.contains('0')` — träfe schon auf die Ziffer in "§ 201 StGB" der
+    Attestation zu, ganz unabhängig davon, ob die Ablehnungs-Meldung je
+    gedruckt wurde. Behoben durch eine Prüfung auf die wörtliche Zeichenkette
+    "Remote: 0 frames, Local: 0 frames".
+  - Kleinere Korrektur aus derselben Runde: der Doc-Kommentar auf
+    `StreamStats::frame_count` behauptete "captured so far", obwohl der Wert
+    nur gelesene, nicht verlorene Samples zählt — bei `loss_count > 0` also
+    untertreibt. Präzisiert auf "read", mit Verweis auf `loss_count`.
+  - Zurückgestellt, kein Merge-Blocker: `cli` steht nicht in
+    `xtask::audit::GUARDED_CRATES` — die "kein Schreibpfad"-Eigenschaft
+    dieser Crate ist heute durch Review belegt, nicht maschinell erzwungen.
+    Dieselbe offene Frage wie bei `session` (Issue #9s Decision-Log-Eintrag),
+    jetzt auch für `cli` festgehalten, für die Planung.

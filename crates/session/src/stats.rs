@@ -25,7 +25,10 @@ const SILENCE_FLOOR_DBFS: f32 = -96.0;
 /// observable.
 #[derive(Debug, Clone, Copy)]
 pub struct StreamStats {
-    /// Audio frames (one sample per channel) captured so far.
+    /// Audio frames (one sample per channel) this reader has actually read
+    /// so far. Excludes any samples counted in [`Self::loss_count`] instead
+    /// — a stalled reader under-reports capture progress rather than
+    /// silently including data it never saw.
     pub frame_count: u64,
     /// How far into the session this stream's clock has advanced —
     /// [`crate::Session::elapsed`].
