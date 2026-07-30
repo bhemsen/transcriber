@@ -452,3 +452,31 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     hält `push()` in O(1) unabhängig von der Leserzahl — der konkrete Mechanismus
     hinter der Spec-Zusage, dass der Fan-out an ASR und VAD in Phase 2/3 rein
     additiv wird, ohne den Ringpuffer selbst anzufassen.
+- 2026-07-30: Issue #6 (`audio`-Downmix und -Resampling) legt vier
+  Detailentscheidungen fest:
+  - **Downmix vor Resampling**, nicht danach: die Kanäle werden per
+    arithmetischem Mittel auf mono gemischt, bevor `rubato` läuft. Mitteln
+    zweier Kanäle erzeugt keine Frequenz, die im Quellsignal nicht schon
+    vorhanden war — die Reihenfolge kann also selbst kein Aliasing erzeugen —
+    und halbiert nebenbei die Sample-Menge, die der Resampler filtern muss.
+    Die eigentliche Anti-Alias-Filterung bleibt vollständig `rubato`s Aufgabe.
+  - `rubato::FftFixedInOut` statt eines `Sinc*`-Resamplers: bei 48 kHz → 16 kHz
+    ist das Verhältnis exakt 3:1, genau der Fall, für den dieser Resampler-Typ
+    gebaut ist. Sein Anti-Alias-Cutoff wird aus `fft_size_in`/`fft_size_out`
+    automatisch auf die Ziel-Nyquist-Frequenz (8 kHz) gelegt — ohne dass eigene
+    Sinc-Parameter (`f_cutoff`, `sinc_len`, Fenster) von Hand kalibriert werden
+    müssen, was die Fehlerfläche für ein falsch konfiguriertes Filter auf null
+    reduziert. Eingabe-Chunk-Größe: 480 Frames (10 ms bei 48 kHz, glatt durch 3
+    teilbar), macht `output_delay()` und die Chunk-Arithmetik exakt statt
+    gerundet.
+  - Der Resampler-Zustand (der FFT-Overlap-Tail, das Downmix-Restsample unter
+    einem vollen Frame, die noch nicht abgeholten resampelten Samples) liegt
+    vollständig in `StreamResampler`, gebunden an genau einen `ReaderId` bei
+    Konstruktion. Zwei Leser desselben Ringpuffers bekommen zwei Instanzen —
+    das macht den Fan-out aus Phase 2/3 rein additiv (eine weitere Instanz je
+    zusätzlichem Leser, kein gemeinsamer Zustand, den ein langsamer Leser
+    verderben könnte). Belegt durch einen Test mit zwei Lesern in
+    unterschiedlichem Lesetempo, die byte-identische Ausgabe liefern.
+  - Der synthetische Sinus für den Resampling-Test lebt ausschließlich im
+    Testmodul von `crates/audio/src/resample.rs`, nicht als öffentliche API —
+    die Testton-Quelle samt `SourceFactory` ist Issue #7s Fläche, nicht diese.

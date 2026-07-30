@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+rubato = "0.15"
 thiserror = "2"
 zeroize = "1"
 
