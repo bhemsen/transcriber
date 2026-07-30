@@ -68,7 +68,11 @@ pub(crate) fn cleanup(dir: &Path) {
 
 /// Every file under `root`, as paths relative to it — recursing into every
 /// subdirectory, not just its top level, so a file written into a nested
-/// directory is not missed.
+/// directory is not missed. Treats an unreadable or already-gone `root` the
+/// same as an empty one (via [`collect_files`]'s `let ... else { return }`)
+/// rather than surfacing the read error — acceptable here because every
+/// caller only ever calls this on a directory it just created itself and
+/// still owns, never one it suspects may have vanished.
 pub(crate) fn snapshot(root: &Path) -> BTreeSet<PathBuf> {
     let mut files = BTreeSet::new();
     collect_files(root, root, &mut files);
@@ -194,9 +198,10 @@ pub(crate) fn run_and_watch(
 
 /// Fails unless `stdout` contains a `{key}=<n>` line with `n > 0` — the
 /// proof the child's session actually pulled frames, not just started and
-/// exited. A non-zero exit status alone would not catch a session that
-/// silently failed to start: that would also leave 0 new files behind and
-/// pass the directory check vacuously.
+/// exited. Checking only the exit status would not catch this: a session
+/// that starts fine but silently pulls nothing still exits 0, would still
+/// leave 0 new files behind, and would pass the directory check
+/// vacuously.
 pub(crate) fn assert_frames_captured(stdout: &str, key: &str) {
     let Some(line) = stdout.lines().find(|line| line.starts_with(key)) else {
         panic!("fs_audit_child stdout missing a {key} line:\n{stdout}");

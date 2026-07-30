@@ -1136,9 +1136,10 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
        `AudioSourceEvent::Frame` zählt; der Kindprozess druckt
        `remote_frames=<n>` / `local_frames=<n>` auf stdout, der Parent-Test
        parst beide Zeilen und verlangt `n > 0` für **beide** Ströme — nicht
-       nur den Exit-Code. Eine Sitzung, die beim Start scheitert, hätte sonst
-       „0 neue Dateien" **und** Exit-Code 0 vom vorherigen `fail()`-Pfad
-       vorgetäuscht; mit dem Frame-Zähler scheitert sie stattdessen laut.
+       nur den Exit-Code. Eine Sitzung, die startet, aber nichts pullt,
+       hätte sonst „0 neue Dateien" **und** Exit-Code 0 vorgetäuscht (der
+       `fail()`-Pfad selbst beendet immer mit Code 2, deckt diesen Fall
+       also nicht ab); mit dem Frame-Zähler scheitert sie stattdessen laut.
     2. *Rekursiv, nicht nur oberste Ebene.* `snapshot()` steigt in jedes
        Unterverzeichnis ab. Durch Mutationstest belegt: mit der Rekursion
        stillgelegt schlägt `detects_a_file_written_into_either_watched_directory`
@@ -1206,8 +1207,10 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
       Gegenprobe an, die die erste Fassung dieses Eintrags nicht gemacht
       hatte: 48 000 Frames (alter Wert) mit 2 ms Poll-Intervall fängt die
       Sequenz weiterhin zuverlässig, während 2 000 000 Frames mit dem alten
-      15-ms-Intervall sie durchgehend verfehlt. `TOTAL_FRAMES` trägt zur
-      Erkennung dieser konkreten Sequenz **nichts** bei — sie läuft
+      15-ms-Intervall sie nahezu durchgehend verfehlt (eine dritte
+      Review-Runde maß dort 1 von 10 Treffern statt 0 von 10 — die
+      Richtung und die Schlussfolgerung ändert das nicht). `TOTAL_FRAMES`
+      trägt zur Erkennung dieser konkreten Sequenz **nichts** bei — sie läuft
       synchron auf dem Haupt-Thread des Kindprozesses, direkt nach
       `Session::start`, entkoppelt von der Auslastung der
       Erfassungs-Threads, die `TOTAL_FRAMES` steuert. Der Wert bleibt trotzdem
