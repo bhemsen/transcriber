@@ -160,6 +160,28 @@ impl RingBuffer {
         self.write_pos += samples.len() as u64;
     }
 
+    /// Explicitly zeroes every sample currently held in this buffer's
+    /// backing storage, in place — the capacity invariant holds through
+    /// this call, nothing is resized or reallocated.
+    ///
+    /// `docs/constitution.md`: PCM buffers are explicitly zeroed at session
+    /// end, not merely dropped. `Zeroizing` already zeroes on `Drop`, but
+    /// `transcriber-session`'s `Session::stop` calls this before the buffer
+    /// (and the `Session` around it) goes away, so the guarantee holds
+    /// while the buffer is still reachable, not only after.
+    pub fn zeroize(&mut self) {
+        self.storage.fill(0.0);
+    }
+
+    /// True if every sample this buffer's backing storage currently holds
+    /// is exactly `0.0` — a query that proves [`Self::zeroize`]'s guarantee
+    /// without ever exposing the samples themselves, the same reason this
+    /// type has no `Debug` impl.
+    #[must_use]
+    pub fn all_zero(&self) -> bool {
+        self.storage.iter().all(|&sample| sample == 0.0)
+    }
+
     /// Copies up to `out.len()` unread samples for `reader` into `out`,
     /// oldest first, and advances its cursor. Returns how many were copied.
     ///
@@ -333,5 +355,26 @@ mod tests {
         assert_eq!(read, 7);
         assert_eq!(out, vec![1.0, 2.0, 0.0, 0.0, 0.0, 9.0, 9.0]);
         assert_eq!(buffer.discontinuity_count(), 1);
+    }
+
+    #[test]
+    fn a_fresh_buffer_is_all_zero() {
+        let buffer = RingBuffer::new(tiny_format());
+        assert!(buffer.all_zero());
+    }
+
+    #[test]
+    fn zeroize_clears_written_samples_without_changing_capacity_or_the_base_pointer() {
+        let mut buffer = RingBuffer::new(tiny_format());
+        push_samples(&mut buffer, &[1.0, 2.0, 3.0]);
+        assert!(!buffer.all_zero(), "sanity: real samples were written");
+
+        let capacity = buffer.capacity();
+        let base_ptr = buffer.storage.as_ptr();
+        buffer.zeroize();
+
+        assert!(buffer.all_zero());
+        assert_eq!(buffer.capacity(), capacity);
+        assert_eq!(buffer.storage.as_ptr(), base_ptr);
     }
 }

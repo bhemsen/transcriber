@@ -804,6 +804,233 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     Issue nicht mehr wahr. Aktualisiert auf einen Verweis auf
     `CaptureSubject::started_at` und `identity_still_matches`, damit #12
     keine bereits überflüssige Umgehung baut.
+- 2026-07-30: Issue #9 (`session`-Zustandsmaschine mit typseitigem
+  Consent-Gate) legt sechs Detailentscheidungen fest:
+  - `CapturePlan` trägt `subject: CaptureSubject`, `remote: Box<dyn
+    AudioSource>` (obligatorisch — `open_remote` liefert nie eine Absenz)
+    und `local: Option<Box<dyn AudioSource>>`, exakt `docs/architecture.md`s
+    Flow 1 ("die geöffneten `AudioSource`s (Mikrofon und
+    Prozessbaum-Loopback)"). `Session` besitzt pro Strom einen eigenen
+    Capture-Thread und einen `Arc<Mutex<RingBuffer>>`; eine Quelle
+    *produziert* nur über `pull`, ohne eigene Pufferung — die
+    Eigentums-Grenze aus der Issue-Vorgabe.
+  - Die gemeinsame Sitzungs-Null (`SessionZero`, in `clock.rs`) ist ein
+    `Instant`, den `Session::start` einmal aufzeichnet. Jeder Capture-Thread
+    verankert beim Start einen eigenen `StreamClock` darauf: die seit der
+    Sitzungs-Null vergangene Wanduhrzeit im Moment des Thread-Starts, plus —
+    ab dem ersten Frame — der Geräte-Tick-Nullpunkt dieses Stroms. Spätere
+    Frames normalisieren sich als Wanduhr-Anker plus vergangene Geräte-Ticks.
+    Damit tragen `Remote` und `Local` trotz unabhängiger Geräte-Uhren eine
+    vergleichbare, auf dieselbe Null bezogene Zeitachse — belegt durch einen
+    Test, der zwei zu unterschiedlichen Zeitpunkten verankerte Uhren für
+    denselben Geräte-Tick unterschiedliche, monoton größere Offsets liefern
+    lässt. `Session::elapsed(identity)` legt das Ergebnis offen (`None` nur
+    für `Local` ohne Mikrofon).
+  - `RingBuffer` (Crate `audio`) bekommt zwei neue Methoden, `zeroize()`
+    (füllt die Storage in-place mit `0.0`, keine Reallokation) und
+    `all_zero()` (reine Abfrage, gibt nie Samples zurück). Nötig, weil die
+    Akzeptanz dieses Issues explizit maschinell beweisen muss, dass nach
+    `stop()` kein Sample mehr auffindbar ist — `Zeroizing`s Nullen-bei-Drop
+    allein hätte das nicht *während* die `Session` noch erreichbar ist,
+    belegt. Eine crate-übergreifende Änderung, hier bewusst offengelegt statt
+    stillschweigend vollzogen; `audio` bleibt sonst unverändert.
+  - `Session::stop()` durchläuft real beide Kanten
+    (`request_stop` dann `end`) statt sie zu verschmelzen — ein Aufrufer ohne
+    Interesse am `Stopping`-Zwischenzustand bekommt die Bequemlichkeit einer
+    Methode, aber die Zustandsmaschine bleibt zweikantig und einzeln
+    aufrufbar (`request_stop`/`end` sind beide `pub`).
+  - Die Capture-Loop prüft `stop` **nach** jedem `pull`, nie davor: ein
+    Review-Fund während der Implementierung zeigte, dass ein `stop`, der die
+    Thread-Terminierung im Wettlauf mit deren allererster Ausführung
+    schlägt, sonst einen Strom mit bereits bereitstehenden Daten (die
+    Testton-Quelle mit `with_total_frames`) ganz ohne einen einzigen `pull`
+    beenden konnte — von außen ununterscheidbar von einer erfolgreich
+    genullten Sitzung, weil beide Male der Puffer nur Nullen zeigt. Behoben,
+    indem jede Iteration mindestens einen `pull` ausführt, bevor `stop`
+    geprüft wird.
+  - Der `trybuild`-`compile_fail`-Fall reicht bewusst `()` statt eines
+    fehlenden zweiten Arguments an `Session::start` — ein Typfehler (E0308)
+    statt eines Arity-Fehlers (E0061). E0061 trägt seit einigen
+    Rust-Versionen einen mehrzeiligen `help: provide the argument`-Block mit
+    Platzhalter-Kommentar, dessen genauer Wortlaut jünger und damit
+    wandelbarer ist als die knappe "expected X, found Y"-Form von E0308.
+    `tests/compile_fail/session_requires_consent_attestation.stderr` ist
+    eingecheckt (ohne eine Datei akzeptiert `trybuild` den Fall nur als
+    "wip" und schlägt fehl); ein künftiger Toolchain-Bump kann sie trotzdem
+    neu erzeugen müssen — der akzeptierte, in der ganzen `trybuild`-Literatur
+    übliche Preis fest gepinnter Compiler-Diagnosen.
+  - Zurückgestellt, kein Merge-Blocker: `Session` legt keine
+    Pro-Strom-Statistik (Verlustzahl, Discontinuity-/Timestamp-Error-Zähler)
+    offen und keinen Leser-Zugriff auf den Ringpuffer — die Spec-Akzeptanz
+    dieses Issues nennt das nicht, und das nächste Issue (`cli`,
+    „Pro-Strom-Statistik") entscheidet mit eigenem Kontext, welche Form der
+    Leser-Zugriff dafür braucht, statt dass dieses Issue rät.
+  - Ein Review vor dem Merge (frischer Agent, Opus) deckte zwei echte
+    Lebenszyklus-Fehler auf, beide vor dem Merge behoben:
+    - **Der Fund:** `StreamCapture` hatte keinen `Drop`-Impl. Eine `Session`,
+      die ohne `stop()` fallen gelassen wird — ein Panic zwischen `start` und
+      `stop`, ein früher `?`-Rückgabepfad eines Aufrufers — ließ den
+      Capture-Thread unentwegt weiterlaufen (die `Arc`s hielten `RingBuffer`
+      am Leben) und nullte nie. Belegt durch einen reproduzierten Lauf: 12
+      auf 40 gepullte Frames 150 ms nach dem Fallenlassen, in einem Puffer,
+      den keine API mehr erreichte. Behoben durch `impl Drop for
+      StreamCapture`, das `signal_stop` → `join` → `zeroize` idempotent
+      nachzieht — belegt durch
+      `capture::tests::dropping_without_stop_still_stops_the_thread_and_zeroes_the_buffer`
+      mit einer *unbegrenzten* Testton-Quelle, damit nur `Drop`, nie ein
+      erschöpfter Frame-Vorrat, für das Thread-Ende verantwortlich sein
+      kann.
+    - **Der Fund:** `Session::request_stop` signalisierte und jointe jeden
+      Strom **sequentiell** über `?` — panicte `remote`s Thread, kehrte die
+      Methode zurück, **bevor** `local`s Stop-Flag je gesetzt wurde. Der
+      Zustand steht dann bereits auf `Stopping` (nicht wiederholbar über
+      `request_stop`), aber `end()` wird akzeptiert und nullt einen Puffer,
+      in den `local` noch aktiv schreibt — die Akzeptanz-Zusage „nach `stop`
+      ist kein Sample mehr auffindbar" gilt auf diesem Pfad nicht. Belegt
+      durch einen reproduzierten Lauf: lokaler Pull-Zähler 19 → 47 in
+      150 ms nach einem `request_stop`, der bereits `Err` zurückgegeben
+      hatte. Behoben durch Aufspalten von `StreamCapture::request_stop_and_join`
+      in `signal_stop` (kann nicht fehlschlagen) und `join`
+      (blockierend, fehlerbehaftet): `Session::request_stop` signalisiert
+      jetzt **jeden** Strom, bevor es **irgendeinen** joint, und meldet den
+      ersten Fehler erst, nachdem alle Joins gelaufen sind — belegt durch
+      `session::tests::request_stop_still_stops_local_even_when_remote_panics`
+      (eine panische `Remote`-Quelle, ein unbegrenzter `Local`-Strom, dessen
+      `elapsed()` sich nachweislich nicht mehr ändert, sobald `request_stop`
+      zurückkehrt). Nebenbefund: dieselbe Umstellung entfernt die zuvor
+      sequentielle Stop-Latenz von bis zu `2 × PULL_TIMEOUT` auf einen
+      parallel signalisierten, nur noch einmal seriell gejointen Ablauf.
+    - Zwei weitere, kleinere Korrekturen aus derselben Runde: die
+      Tick-Arithmetik in `clock.rs::normalize` nutzt jetzt
+      `saturating_sub`/`saturating_mul` statt ungeprüfter `i64`-Subtraktion
+      auf geräteseitig gelieferten Werten (erreichbar außerhalb von Tests);
+      und ein vergifteter Ring-Mutex in `capture_loop` meldet jetzt
+      `SessionEvent::StreamFailed`, statt den Thread stillschweigend zu
+      beenden — die beiden anderen Exit-Pfade der Schleife meldeten immer
+      schon ein Ereignis, dieser tat es nicht.
+    - Zwei Doc-Kommentare behaupteten etwas, was der Code nicht (mehr) tat:
+      `tests/consent_gate.rs` behauptete, es gebe bewusst **keine**
+      `.stderr`-Datei — es gibt eine, `trybuild` akzeptiert `compile_fail`
+      ohne sie nur als „wip" und schlägt fehl. Und die Behauptung, die
+      Konstruktionszeilen der `compile_fail`-Fixture seien mit
+      `tests/session_lifecycle.rs` „wortgleich" geteilt, war falsch — beide
+      Dateien enthielten unabhängige Kopien, die Fixture zusätzlich mit
+      `.unwrap()` statt des sonst durchgehaltenen `let ... else { panic!()
+      }`-Musters (dort kein Clippy-Verstoß, weil `tests/compile_fail/` kein
+      eigenes Test-Target ist, aber ein Bruch der Konvention). Beide
+      Kommentare korrigiert, die Fixture auf `let-else` umgestellt.
+  - `session` steht nicht in `xtask::audit::GUARDED_CRATES` (nur `audio`,
+    `audio-win`, `asr`, `diarize` — die Liste, die `docs/constitution.md`
+    beim Namen nennt). Bewusst nicht in diesem Issue ergänzt: die Spec
+    dieser Phase listet den Audit-Test nicht unter den Akzeptanzkriterien
+    dieses Issues, und `session` hat heute keinen Schreibpfad. Festgehalten
+    als offene Frage für die Planung, nicht stillschweigend entschieden:
+    `session` besitzt ab jetzt jeden Ringpuffer mit live-PCM und verdient
+    denselben Audit-Schutz wie die vier gelisteten Crates.
+- 2026-07-30: Eine zweite Review-Runde (frischer Agent, Opus) bestätigte die
+  beiden Fixes der ersten Runde als echt und wirksam (per Falsifikation:
+  jeweils der alte Code zurückgesetzt, der zugehörige Regressionstest
+  schlug reproduzierbar fehl), deckte aber zwei weitere Punkte auf, beide
+  vor dem Merge behoben:
+  - **Der Fund:** `session.rs` war durch die neuen Regressionstests der
+    ersten Runde auf 407 Zeilen gewachsen — über die 400-Zeilen-Grenze der
+    Constitution, von keinem Clippy-Lint erfasst (`too_many_lines` misst nur
+    Funktionen). Behoben nach dem im Repo etablierten Muster
+    (`crates/audio/src/test_tone.rs` + `test_tone/tests.rs`): das
+    Testmodul wandert nach `crates/session/src/session/tests.rs`,
+    `session.rs` behält nur `#[cfg(test)] mod tests;`. Direkt danach 286
+    bzw. 163 Zeilen — spätere Regressionstests (Runden 3 und 4) lassen
+    beide seither weiterwachsen, bleiben aber unter der Grenze.
+  - **Der Fund:** Der `Drop`-Fix der ersten Runde behob den unbegrenzten
+    Fall (Bug 2), führte aber eine **begrenzte** Version derselben
+    Fehlerform am Abbruchpfad wieder ein: `Session` selbst hatte keinen
+    eigenen `Drop`, also lief Rusts feldweise Reihenfolge (`remote` vor
+    `local`) — `remote`s `StreamCapture::drop` signalisiert **und** jointe
+    blockierend (bis zu `PULL_TIMEOUT`), bevor `local`s Stop-Flag je gesetzt
+    wurde. Behoben durch drei geteilte private Methoden
+    (`signal_all_streams_to_stop`, `join_all_streams`, `zero_all_streams`),
+    die `request_stop`/`end` jetzt nutzen, plus ein neues `impl Drop for
+    Session`, das dieselbe Reihenfolge (signalisieren, dann erst joinen,
+    dann nullen) am Abbruchpfad nachzieht — idempotent, weil die
+    anschließend automatisch laufenden feldweisen `Drop`-Aufrufe dann nichts
+    mehr vorfinden.
+  - Beide Korrekturen zusammen deckten einen dritten, echten Fehler auf, den
+    keine der beiden Review-Runden fand, sondern ein flackernder Testlauf
+    (1 von 5 lokalen Wiederholungen): `capture_loop` aktualisierte
+    `position` **vor** dem Schreiben in `ring`, sodass ein Leser, der einen
+    neuen, von Null verschiedenen `elapsed()`-Wert sah, den zugehörigen
+    Puffereintrag noch nicht zwingend vorfand — kein Sicherheitsproblem für
+    die produktive Nutzung von `elapsed()` allein, aber ein echtes
+    Race in genau der Prüfung, die der Drop-Regressionstest braucht
+    (Ringpuffer real beschrieben, *bevor* gedroppt wird). Behoben durch
+    Vertauschen der Reihenfolge (`ring` zuerst, `position` danach) — die
+    beiden `Mutex`e machen daraus eine echte Happens-before-Garantie
+    (Freigabe von `ring` ist sequenced-before dem Erwerb von `position`
+    im selben Thread; Freigabe von `position` synchronisiert sich mit
+    jedem späteren Erwerb durch einen Leser), nicht nur eine meist
+    zutreffende Reihenfolge. Belegt durch 30 wiederholte Läufe des zuvor
+    flackernden Tests ohne einen weiteren Fehlschlag.
+- 2026-07-30: Eine dritte Review-Runde (frischer Agent, Opus) bestätigte
+  alle drei Korrekturen der zweiten Runde per Falsifikation (jeweils
+  zurückgesetzt, Fehlschlag reproduziert, wieder hergestellt — u. a. 240
+  Läufe des Ringpuffer-Race-Tests unter 16-facher Parallelität, 5 Treffer
+  ohne die Korrektur, 0 mit ihr), fand aber eine echte Lücke: `impl Drop
+  for Session` hatte **keinen eigenen** Regressionstest — mit leerem
+  `drop`-Rumpf blieb die gesamte Suite grün, weil Rounds 1s Test
+  (`capture::tests::dropping_without_stop_...`) nur `StreamCapture` prüft,
+  nicht die `Session`-Ebene, auf der Round 2s Fund saß. Genau die
+  Lücke, durch die der Fund selbst erst entstand — unbeobachtet bliebe er
+  bei einem künftigen „Aufräumen, `StreamCapture` droppt sich doch schon
+  selbst"-Commit wieder. Behoben durch
+  `session::tests::dropping_a_session_signals_every_stream_before_joining_any`:
+  ein `Remote`, dessen `pull` 250 ms blockiert (`SlowRemote`), und ein
+  `Local`, das seine `pull`-Aufrufe zählt (`CountingLocal`) — fällt
+  `local`s Stop-Signal erst nach `remote`s blockierendem Join, klettert der
+  Zähler während der 250 ms um Tausende (per Falsifikation belegt: 4455–4976
+  bei leerem `drop`-Rumpf über drei Läufe), mit der Korrektur um 0. Dazu
+  eine kleine Ungenauigkeit in einem Kommentar in `capture.rs` korrigiert
+  (die Happens-before-Kette bezieht sich auf die *Freigabe*, nicht den
+  *Erwerb*, von `position`, und gilt nur, solange ein Leser dieselbe
+  Reihenfolge einhält — jetzt so benannt).
+- 2026-07-30: Eine vierte Review-Runde (frischer Agent, Opus) prüfte die
+  gesamte PR noch einmal von vorn, nicht nur den letzten Patch, und deckte
+  einen Fund auf, den keine der drei vorherigen Runden sah: **zwei der
+  fünf `SessionEvent`-Varianten waren strukturell unzustellbar.**
+  `MicrophoneUnavailable` und `StreamDegraded` werden ausschließlich
+  innerhalb von `Session::start` gesendet — bevor `start` zurückkehrt und
+  damit bevor irgendein Aufrufer `Session::subscribe` überhaupt hätte
+  rufen können. `tokio::sync::broadcast` puffert nie für einen Empfänger,
+  der erst **nach** einem `send` entsteht; der ursprüngliche Empfänger aus
+  `broadcast::channel(..)` wurde in `start` sofort verworfen
+  (`let (events, _receiver) = ...`). Belegt durch eine Probe des Reviewers:
+  ein Abonnent direkt nach `start` sah eine leere Ereignisliste. Drei
+  Doc-Kommentare (auf `Session::start`, `Session::start_local` und
+  `SessionEvent::MicrophoneUnavailable` selbst) behaupteten das Gegenteil —
+  wieder die Doc-Drift-Klasse, die diese PR schon zweimal korrigiert hat,
+  dieses Mal aber am Verhalten selbst, nicht nur am Kommentar. Kein
+  Test deckte die Zustellung ab, nur die Zustands-Accessor (`has_local_stream`,
+  `*_degradation`), was den Fund unsichtbar hielt.
+
+  Von den drei vom Reviewer vorgeschlagenen Optionen (Startempfänger
+  aufheben und dem ersten Abonnenten geben; die beiden Sends aus `start`
+  herausziehen und erst bei der ersten Anmeldung nachliefern; die beiden
+  Varianten ganz entfernen und auf die längst vorhandenen, längst
+  getesteten Accessor verweisen) gewählt: **die erste.** `Session` trägt
+  jetzt `startup_receiver: Option<broadcast::Receiver<SessionEvent>>`, mit
+  dem in `start` erzeugten Empfänger befüllt; `subscribe(&mut self)`
+  (vorher `&self` — die Mutation, um ihn per `Option::take` zu entnehmen,
+  ist die einzige Signaturänderung) gibt ihn beim ersten Aufruf zurück und
+  fällt danach auf ein gewöhnliches `events.subscribe()` zurück. Gewählt
+  statt der beiden anderen Optionen, weil sie ohne neue Interna am
+  bestehenden `broadcast`-Kanal auskommt und die beiden Varianten als
+  eigenständige, dem Nutzer sichtbare Ereignisse erhält (Variante 3 hätte
+  das Vokabular verkleinert, das `docs/design.md`s künftiger
+  Konsent-/Status-Anzeige eventuell nützt). Belegt durch
+  `session::tests::the_first_subscriber_still_sees_an_event_published_during_start`
+  (per Falsifikation: mit der naiven `events.subscribe()`-Implementierung
+  schlägt der Test zuverlässig fehl, mit der Korrektur nicht mehr) — der
+  bestehende Test `a_missing_microphone_warns_instead_of_aborting` prüfte
+  weiterhin nur die Accessor, deckte die Zustellungslücke deshalb nie auf.
 - 2026-07-30: Issue #12 (`audio-win`-Loopback-Erfassung, `open_remote`) legt
   eine Entscheidung fest, die kein am 2026-07-30 geprüfter `wasapi`-Quelltext
   aufgedeckt hatte, weil sie nicht die Sicherheit eines einzelnen Aufrufs
