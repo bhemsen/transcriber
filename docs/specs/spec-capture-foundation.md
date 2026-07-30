@@ -606,3 +606,100 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     existiert) und die Erkennung von `[target.'cfg(...)'.dependencies]` in
     der Manifest-Schicht (relevant erst mit `audio-win`, dokumentiert als
     offene Lücke im Doc-Kommentar von `parse_direct_dependencies`).
+- 2026-07-30: Issue #7 (`AudioSource`/`SourceFactory`-Traits und die
+  synthetische Testton-Quelle) legt die Trait-Form fest, an der #9, #11–#13
+  und #14 nicht mehr rütteln sollen:
+  - `AudioSource: Send` mit genau drei Methoden: `identity() -> StreamIdentity`,
+    `format() -> StreamFormat`, `pull(timeout: Duration) ->
+    Result<AudioSourceEvent, AudioSourceError>` und einer vierten mit
+    Default-Implementierung, `degradation() -> Option<SourceDegradation>`
+    (Default `None`). `AudioSourceEvent` ist `Frame(Frame) | Idle | Ended` —
+    die drei Zustände, die der Windows-Backend-Teil dieser Spec bereits
+    festlegt (Event-Timeout, `get_next_packet_size() -> None` → `Idle`;
+    Lesefehler auf dem Loopback-Client, invalidiertes Gerät → `Ended`), sodass
+    `AudioSourceError` nur noch für einen wirklich unklassifizierten Fehler
+    übrigbleibt. `Send` als Supertrait genügt, damit `Box<dyn AudioSource>`
+    ohne weitere Annotation auf einen eigenen Capture-Thread wandert — belegt
+    durch einen Test, der eine Instanz per `thread::spawn` verschiebt und
+    `pull` dort aufruft, statt die Annahme nur zu behaupten.
+  - `SourceDegradation` trägt bewusst nur `EchoCancellationUnavailable` und
+    keinen Windows-Bezug im Namen oder Kommentar — die Fähigkeitsprobe
+    `is_aec_supported()` ist `audio-win`s Sache, dieser Typ ist nur das
+    plattformfreie Vokabular, über das eine Quelle das Ergebnis meldet.
+  - `SourceFactory` (kein `Send`-Supertrait — nur die geöffneten `AudioSource`s
+    wandern auf einen Capture-Thread, die Fabrik selbst nicht) mit
+    `list_subjects()`, `open_remote(&CaptureSubject) ->
+    Result<Box<dyn AudioSource>, SourceFactoryError>` und
+    `open_local() -> Result<Option<Box<dyn AudioSource>>, SourceFactoryError>`.
+    Ein fehlendes Mikrofon ist `Ok(None)`; `SourceFactoryError::Open{identity,
+    reason}` ist für einen echten Fehler reserviert — auch für den Fall, dass
+    `audio-win`s Identitätsprüfung zwischen `list-sources` und `capture` eine
+    seit der Auflistung veränderte Prozessidentität entdeckt (eine recycelte
+    PID) und deshalb bewusst laut scheitern muss statt eine falsche Anwendung
+    zu öffnen.
+  - `TestToneSource` synthetisiert einen Sinus aus einem Phasenakkumulator,
+    der über `pull`-Aufrufe hinweg weiterläuft (kein Klicken an
+    Chunk-Grenzen), in Chunks von 480 Frames (10 ms bei 48 kHz — in derselben
+    Größenordnung wie das, was `get_next_packet_size()` auf dem echten
+    Loopback-Client liefert; der reale Wert schwankt mit der
+    Geräte-Periode, landet also nicht zuverlässig exakt auf 480) und mit
+    `with_total_frames(...)` optional auf ein festes Budget begrenzt, damit
+    ein Test `Ended` deterministisch erreichen kann, ohne dass ein Gerät das
+    Stromende signalisiert. `TestToneSources` vergibt dem
+    `Remote`- und dem `Local`-Strom unterschiedliche Frequenzen (440/660 Hz),
+    damit ein künftiger Zwei-Strom-Sitzungstest (Issue #9) sie allein am Ton
+    unterscheiden kann, und `without_microphone()` lässt `open_local()`
+    `Ok(None)` liefern, um den "fehlendes Mikrofon"-Vertrag ohne echtes Gerät
+    zu prüfen.
+  - `audio` bekommt mit diesem Issue seine erste interne Pfad-Abhängigkeit
+    (`transcriber-core`, für `CaptureSubject`/`StreamIdentity`) — im Einklang
+    mit der Abhängigkeitsrichtung `core ← audio` aus `docs/architecture.md`.
+    `cargo deny check`s `wildcards = "deny"`-Regel meldet eine Pfad-Abhängigkeit
+    ohne `version`-Angabe als Wildcard-Fund. Ein Review vor dem Merge deckte
+    auf, dass der naheliegende Gegenzug — `version = "0.1.0"` neben `path`
+    ergänzen — den Build am nächsten Minor-Bump zerbricht: reproduziert durch
+    `[workspace.package] version` auf `0.2.0` gesetzt und `cargo metadata
+    --offline` ausgeführt, was mit `failed to select a version for the
+    requirement transcriber-core = "^0.1.0"` fehlschlägt, weil jede Crate ihre
+    Version über `version.workspace = true` erbt und die Pfad-Abhängigkeit
+    damit eine zweite, unverbundene Kopie der Versionsnummer trägt —
+    `docs/release.md` nennt `[workspace.package] version` ausdrücklich „die
+    einzige Quelle der Versionsnummer". Stattdessen: `publish = false` in
+    `crates/audio/Cargo.toml` **und** `crates/core/Cargo.toml` (ohnehin
+    korrekt — `docs/release.md`: „Kein Registry-Schritt … nichts wird nach
+    crates.io … publiziert") plus `allow-wildcard-paths = true` unter
+    `[bans]` in `deny.toml`; `version` bleibt von der Pfad-Abhängigkeit ganz
+    weg. Beide Teile sind nötig — `cargo-deny` 0.20.2 lehnt
+    `allow-wildcard-paths` allein für eine als publizierbar markierte Crate
+    ab. Belegt durch denselben `0.2.0`-Versionsbump erneut ausgeführt: löst
+    jetzt ohne Fehler auf, und `cargo deny check` bleibt grün.
+  - Zurückgestellt, nicht Teil dieses Issues: eine explizite `stop()`/`close()`-
+    Methode auf `AudioSource`. Rust-Ownership plus `Drop` auf der konkreten
+    Backend-Implementierung genügt, um eine Ressource beim Fallenlassen
+    freizugeben; eine zusätzliche Trait-Methode dafür hätte nur Fläche ohne
+    einen Fall, den die Downstream-Issues bereits brauchen.
+  - Ein Review vor dem Merge deckte auf, dass `TestToneSource` `pull`s
+    `timeout`-Argument zwar entgegennahm, aber niemals `Idle` melden konnte —
+    genau der Fall, den die Spec als am häufigsten falsch behandelten nennt
+    ("für uns wäre das ein Abbruch bei jeder Gesprächspause"). Behoben durch
+    `TestToneSource::with_idle_every(n: NonZeroU64)` (jeder n-te `pull()`
+    meldet `Idle` statt eines Frames, ohne die Tonhöhe oder `frames_emitted`
+    zu verändern) und den passenden Durchgriff `TestToneSources::
+    with_idle_every`/`with_total_frames`, damit auch ein Test, der nur
+    `Box<dyn SourceFactory>` sieht (der ganze Zweck der injizierbaren
+    Fabrik), einen geöffneten Strom deterministisch durch `Idle` und bis zu
+    einem begrenzten `Ended` treiben kann, statt nur der direkte
+    `TestToneSource`-Konstruktor.
+  - Zurückgestellt, als Folge-Empfehlung ohne diesen Merge zu blockieren,
+    beide aus demselben Review: `AudioSourceError`/`SourceFactoryError`
+    tragen `reason: String` statt eines erhaltenen `#[source]`-Fehlers — für
+    `audio-win`s künftige `wasapi`-Fehler ginge damit die ursprüngliche
+    Fehlerkette verloren, sichtbar bliebe nur der formatierte Text. Und
+    `CaptureSubject` (in `core`) trägt keine Startzeit, nur `process_name`
+    und `root_pid` — der Kanal für den spec-verbindlichen Identitätscheck
+    (Name **und** Startzeit) zwischen `list-sources` und `capture` existiert
+    also in `SourceFactoryError::Open`, der Beleg dafür aber noch nicht;
+    `SourceFactory::open_remote`s Doc-Kommentar hält die Lücke jetzt fest,
+    damit `#11`/`#12` sie nicht erst beim Bauen entdecken. Beides ist eine
+    `core`- bzw. Feinschliff-Änderung, keine, die die Trait-Form dieses
+    Issues ändert.
