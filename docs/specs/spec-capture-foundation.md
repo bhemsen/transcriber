@@ -431,3 +431,24 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     `SessionStateError` (via `thiserror`) zurückgeben statt zu paniken. Das ist die
     Zustandsmaschine selbst — verschieden vom `Session`-Orchestrator in `session`,
     der Threads und `AudioSource`s besitzt und weiterhin dort bleibt.
+- 2026-07-30: Issue #5 (`audio`-Ringpuffer und Frame-/Formattypen) legt drei
+  Detailentscheidungen fest, die die Spec offen ließ:
+  - Ein `Frame::Gap` (`data_discontinuity` oder `timestamp_error`) belegt **keinen**
+    Platz im Ringpuffer und rückt den internen Schreib-Cursor **nicht** vor — er
+    erhöht ausschließlich den passenden Zähler (`discontinuity_count` /
+    `timestamp_error_count`). Die reale Zeit einer Lücke steht allein im
+    `DeviceTimestamp`, den der Frame trägt; der Ringpuffer selbst kennt nur
+    Sample-Positionen, keine Zeit. Ein `Frame::silent` dagegen wird als echte
+    Null-Samples in den Ring geschrieben — nur so bleibt die gelesene
+    Sample-Folge für `silent` dicht, während sie über eine Lücke hinweg bewusst
+    nicht dicht ist.
+  - Die beiden Gap-Zähler hängen am `RingBuffer`, nicht am einzelnen Leser-Cursor.
+    Phase 1 nutzt ohnehin nur einen Leser produktiv (siehe Out of scope); ein
+    globaler Zähler je Ursache erfüllt die Verification-Zeile "je Ursache ein
+    eigener Zähler" ohne die Cursor-API vorzeitig um Fan-out-Semantik zu
+    erweitern, die erst Phase 2/3 braucht.
+  - Verlust wird **lazy** beim `read()`-Aufruf berechnet (Soll- gegen
+    Ist-Position des jeweiligen Cursors), nicht eager bei jedem `push()`. Das
+    hält `push()` in O(1) unabhängig von der Leserzahl — der konkrete Mechanismus
+    hinter der Spec-Zusage, dass der Fan-out an ASR und VAD in Phase 2/3 rein
+    additiv wird, ohne den Ringpuffer selbst anzufassen.
