@@ -703,3 +703,104 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     damit `#11`/`#12` sie nicht erst beim Bauen entdecken. Beides ist eine
     `core`- bzw. Feinschliff-Änderung, keine, die die Trait-Form dieses
     Issues ändert.
+- 2026-07-30: Issue #11 (`audio-win`-Enumeration und Prozessbaum-Auflösung)
+  legt fünf Detailentscheidungen fest:
+  - `CaptureSubject` (in `core`) bekommt das dritte Feld `started_at:
+    SystemTime` — die von #7 offengelassene Lücke wird hier geschlossen, weil
+    dieses Issue die einzige Beweisquelle dafür ist (`sysinfo::Process::
+    start_time()`). Bewusst `std::time::SystemTime`, kein `sysinfo`-Typ:
+    `core` bleibt plattform- und I/O-frei, und `SystemTime` ist bereits die
+    Zeit-Repräsentation von `ConsentAttestation::confirmed_at`. `sysinfo`
+    liefert Sekunden seit `UNIX_EPOCH` als `u64`; die Umrechnung
+    (`UNIX_EPOCH + Duration::from_secs(..)`) passiert ausschließlich in
+    `audio-win`s Edge-Schicht (`sources.rs`), nie in `core`. Alle fünf
+    bestehenden Aufrufstellen von `CaptureSubject::new` (`audio`s
+    `TestToneSources` und deren Tests) sind mit `SystemTime::now()`
+    mitgezogen.
+  - Partial-Trait-Wahl: **Option (b)** — `WindowsSources: SourceFactory`
+    landet bereits in diesem Issue, mit echtem `list_subjects` und
+    `open_remote`/`open_local`, die je ein explizites
+    `SourceFactoryError::Open { identity, reason: "... (issue #12/#13)" }`
+    zurückgeben, nie einen erfolgsförmigen Wert. Grund gegen Option (a): bei
+    (a) müssten #12 und #13 unabhängig voneinander denselben Typ
+    `WindowsSources` samt `impl SourceFactory` neu anlegen — ein sicherer
+    Merge-Konflikt, sollten beide Issues nebenläufig laufen (wie es in
+    diesem Projekt für #9/#14 explizit vorgesehen ist). Mit dem Typ bereits
+    vorhanden, ersetzen #12 und #13 je nur den Körper *ihrer* Methode — ein
+    isolierter, kleiner Diff ohne Überlapp.
+  - `identity_still_matches` (Name- und Startzeit-Vergleich, kein
+    PID-Vergleich — die Lookup-PID hat #12s künftiger Aufrufer bereits
+    verwendet, um die aktuellen Werte zu holen) ist bewusst `pub`, nicht
+    `pub(crate)`, obwohl sie in diesem Issue noch **keinen** produktiven
+    Aufrufer hat (`open_remote` ist Stub). Grund: `cargo clippy
+    --workspace --all-targets` (die von `xtask` genutzte Verify-Form) baut
+    die Lib sowohl mit als auch ohne `cfg(test)`; ohne einen Aufrufer außerhalb
+    von `#[cfg(test)] mod tests` wäre die Funktion im `cfg(test)`-freien
+    Durchlauf `dead_code` und würde die Verify-Gate durch `-D warnings` rot
+    machen. `pub`-Elemente sind von diesem Lint ausgenommen, weil eine
+    Bibliothek externe Nutzung nicht ausschließen kann — eine ehrliche
+    Lösung hier, weil die Funktion tatsächlich als Teil der öffentlichen
+    Schnittstelle für #12s `open_remote` gedacht ist, nicht als Umgehung des
+    Lints.
+  - Die Session-Aufzählung ist zweischichtig: `audio-win::sources` (die
+    einzige Stelle mit `wasapi`- und `sysinfo`-Aufrufen) übersetzt
+    `wasapi::AudioSessionControl`/`SessionState` und `sysinfo::Process` in
+    die plattformneutralen Typen `RenderSession`/`SessionActivity`
+    (`sessions.rs`) und `ProcessSnapshot` (`process_tree.rs`), über die die
+    drei geforderten gerätefreien Logiktests laufen
+    (`process_tree/tests.rs`, `sessions/tests.rs`). `SessionActivity`
+    dupliziert `wasapi::SessionState`s drei Varianten unter eigenem Namen,
+    statt den Typ direkt zu verwenden, damit `sessions.rs` `wasapi` nicht
+    importieren muss.
+  - Die Prozessbaum-Auflösung (`resolve_tree_root`) stoppt vor dem Wechsel zu
+    einem Eltern-PID in drei Fällen zusätzlich zur Stop-Liste selbst: ein
+    Zyklus (Eltern-PID bereits im aktuellen Lauf besucht), ein verwaistes
+    Eltern-PID ohne Prozess-Tabellen-Eintrag, und — am Einstieg — ein
+    bereits stop-gelisteter Start-PID. Alle drei sind durch je einen
+    gerätefreien Test belegt (`walk_terminates_on_a_cycle_...`,
+    `walk_stops_at_an_orphaned_parent_...`), nicht nur durch die
+    Stop-Namen/PIDs selbst.
+- 2026-07-30: Ein Review vor dem Merge (frischer Agent, Opus) deckte einen
+  echten Isolations-Fund auf und führte zu vier Nachschärfungen an Issue #11,
+  alle vor dem Merge umgesetzt:
+  - **Der Fund:** `sessions.rs`s `is_excluded` prüfte nur `own_pid` und die
+    Stop-**PIDs** (0/4), nie die Stop-**Namen**. Eine Session, die
+    buchstäblich von einem stop-gelisteten Prozess selbst gehalten wird —
+    z. B. Systemklänge über einen von `svchost.exe` gehosteten
+    Audio-Dienst, ein auf Windows realer Fall — löste sich auf sich selbst
+    als Wurzel auf und wurde als Erfassungs-Ziel angeboten, dessen
+    Prozessbaum die Shell oder ein Dienst-Host ist, nicht eine Anwendung.
+    Genau der Isolationsbruch, den die Stop-Liste verhindern soll, erreicht
+    von der anderen Seite. Behoben, indem `is_stop_listed` aus
+    `process_tree.rs` `pub(crate)` wird und `is_excluded` sowohl auf die
+    rohe Session-PID als auch auf die aufgelöste Wurzel per
+    `is_stop_listed` statt der reinen PID-Liste prüft.
+  - Zwei Tests waren **vakuos**, belegt durch manuelles Mutationstesten
+    (die geprüfte Zeile entfernt, Suite blieb grün):
+    `walk_never_crosses_into_a_stop_listed_parent_pid` hatte für die
+    Stop-PID selbst keinen Prozess-Tabellen-Eintrag, sodass der
+    verwaiste-Eltern-Pfad zufällig dasselbe Ergebnis lieferte wie die
+    PID-Stop-Prüfung — behoben durch einen expliziten Eintrag für die
+    Stop-PID. `the_callers_own_process_is_excluded_even_if_active` prüfte
+    nur den Fall, in dem die rohe Session-PID bereits `own_pid` ist, nie
+    den Fall, in dem `own_pid` erst die aufgelöste Wurzel eines fremden
+    Kind-PIDs ist — ergänzt um
+    `the_callers_own_process_is_excluded_when_it_is_only_the_resolved_root`.
+    Dazu ein neuer Test `a_session_owned_by_a_stop_listed_process_produces_no_subject`
+    über alle vier Stop-Namen, und `stop_listed_pids_are_excluded_even_if_reported_active`
+    läuft jetzt über beide Stop-PIDs statt nur PID 4.
+  - `process_snapshots()` (`sources.rs`) rief `sysinfo::ProcessRefreshKind::
+    everything()`, obwohl die Funktion nur `name()`, `parent()` und
+    `start_time()` liest. Diese drei Felder werden von `sysinfo` beim
+    Entdecken eines Prozesses unbedingt befüllt, unabhängig vom Refresh-Kind
+    — `everything()` hätte zusätzlich Kommandozeile und Umgebungsblock
+    **jedes sichtbaren fremden Prozesses** (auf Windows über
+    `ReadProcessMemory` auf dessen PEB) auf den nicht-zeroisierten Heap
+    dieses Prozesses gezogen, ungenutzt. Widerspricht der
+    Datenminimierung aus `docs/vision.md`. Behoben durch
+    `ProcessRefreshKind::nothing()`.
+  - Der Doc-Kommentar auf `SourceFactory::open_remote` (`audio::factory`)
+    behauptete noch, `CaptureSubject` trage keine Startzeit — durch dieses
+    Issue nicht mehr wahr. Aktualisiert auf einen Verweis auf
+    `CaptureSubject::started_at` und `identity_still_matches`, damit #12
+    keine bereits überflüssige Umgehung baut.

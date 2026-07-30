@@ -1,0 +1,18 @@
+[package]
+name = "transcriber-audio-win"
+description = "Windows SourceFactory: enumerates applications with an active render stream and resolves each to its process-tree root, via wasapi (MIT, pinned to 0.23.x) and sysinfo (MIT). No I/O, no HTTP client."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+wasapi = "0.23"
+sysinfo = "0.33"
+transcriber-core = { path = "../core" }
+transcriber-audio = { path = "../audio" }
+
+[lints]
+workspace = true

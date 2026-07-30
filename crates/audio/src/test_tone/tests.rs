@@ -5,7 +5,7 @@
 
 use std::f64::consts::PI;
 use std::num::NonZeroU64;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use transcriber_core::{CaptureSubject, StreamIdentity};
 
@@ -191,7 +191,7 @@ fn factory_pass_through_configures_idle_and_bounded_opened_sources() {
     let factory = factory
         .with_idle_every(nonzero(2))
         .with_total_frames(frame_budget);
-    let subject = CaptureSubject::new("anything", 1234);
+    let subject = CaptureSubject::new("anything", 1234, SystemTime::now());
     let Ok(mut remote) = factory.open_remote(&subject) else {
         panic!("opening the synthetic remote source must not fail");
     };
@@ -230,7 +230,7 @@ fn open_remote_and_open_local_produce_distinct_identities() {
     let Ok(factory) = TestToneSources::new() else {
         panic!("the fixed 48 kHz stereo format must always construct");
     };
-    let subject = CaptureSubject::new("anything", 1234);
+    let subject = CaptureSubject::new("anything", 1234, SystemTime::now());
     let Ok(remote) = factory.open_remote(&subject) else {
         panic!("opening the synthetic remote source must not fail");
     };
@@ -250,8 +250,8 @@ fn open_remote_ignores_which_subject_is_passed() {
     let Ok(factory) = TestToneSources::new() else {
         panic!("the fixed 48 kHz stereo format must always construct");
     };
-    let subject_a = CaptureSubject::new("app-a", 100);
-    let subject_b = CaptureSubject::new("app-b", 200);
+    let subject_a = CaptureSubject::new("app-a", 100, SystemTime::now());
+    let subject_b = CaptureSubject::new("app-b", 200, SystemTime::now());
     let Ok(a) = factory.open_remote(&subject_a) else {
         panic!("opening the synthetic remote source must not fail");
     };
