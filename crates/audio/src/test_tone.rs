@@ -9,7 +9,7 @@
 //! itself.
 
 use std::num::NonZeroU64;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use transcriber_core::{CaptureSubject, StreamIdentity};
 
@@ -258,7 +258,11 @@ impl TestToneSources {
 
 impl SourceFactory for TestToneSources {
     fn list_subjects(&self) -> Result<Vec<CaptureSubject>, SourceFactoryError> {
-        Ok(vec![CaptureSubject::new("test-tone", SYNTHETIC_ROOT_PID)])
+        Ok(vec![CaptureSubject::new(
+            "test-tone",
+            SYNTHETIC_ROOT_PID,
+            SystemTime::now(),
+        )])
     }
 
     fn open_remote(

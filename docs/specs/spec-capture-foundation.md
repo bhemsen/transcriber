@@ -703,3 +703,60 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     damit `#11`/`#12` sie nicht erst beim Bauen entdecken. Beides ist eine
     `core`- bzw. Feinschliff-Änderung, keine, die die Trait-Form dieses
     Issues ändert.
+- 2026-07-30: Issue #11 (`audio-win`-Enumeration und Prozessbaum-Auflösung)
+  legt fünf Detailentscheidungen fest:
+  - `CaptureSubject` (in `core`) bekommt das dritte Feld `started_at:
+    SystemTime` — die von #7 offengelassene Lücke wird hier geschlossen, weil
+    dieses Issue die einzige Beweisquelle dafür ist (`sysinfo::Process::
+    start_time()`). Bewusst `std::time::SystemTime`, kein `sysinfo`-Typ:
+    `core` bleibt plattform- und I/O-frei, und `SystemTime` ist bereits die
+    Zeit-Repräsentation von `ConsentAttestation::confirmed_at`. `sysinfo`
+    liefert Sekunden seit `UNIX_EPOCH` als `u64`; die Umrechnung
+    (`UNIX_EPOCH + Duration::from_secs(..)`) passiert ausschließlich in
+    `audio-win`s Edge-Schicht (`sources.rs`), nie in `core`. Alle sechs
+    bestehenden Aufrufstellen von `CaptureSubject::new` (`audio`s
+    `TestToneSources` und deren Tests) sind mit `SystemTime::now()`
+    mitgezogen.
+  - Partial-Trait-Wahl: **Option (b)** — `WindowsSources: SourceFactory`
+    landet bereits in diesem Issue, mit echtem `list_subjects` und
+    `open_remote`/`open_local`, die je ein explizites
+    `SourceFactoryError::Open { identity, reason: "... (issue #12/#13)" }`
+    zurückgeben, nie einen erfolgsförmigen Wert. Grund gegen Option (a): bei
+    (a) müssten #12 und #13 unabhängig voneinander denselben Typ
+    `WindowsSources` samt `impl SourceFactory` neu anlegen — ein sicherer
+    Merge-Konflikt, sollten beide Issues nebenläufig laufen (wie es in
+    diesem Projekt für #9/#14 explizit vorgesehen ist). Mit dem Typ bereits
+    vorhanden, ersetzen #12 und #13 je nur den Körper *ihrer* Methode — ein
+    isolierter, kleiner Diff ohne Überlapp.
+  - `identity_still_matches` (Name- und Startzeit-Vergleich, kein
+    PID-Vergleich — die Lookup-PID hat #12s künftiger Aufrufer bereits
+    verwendet, um die aktuellen Werte zu holen) ist bewusst `pub`, nicht
+    `pub(crate)`, obwohl sie in diesem Issue noch **keinen** produktiven
+    Aufrufer hat (`open_remote` ist Stub). Grund: `cargo clippy
+    --workspace --all-targets` (die von `xtask` genutzte Verify-Form) baut
+    die Lib sowohl mit als auch ohne `cfg(test)`; ohne einen Aufrufer außerhalb
+    von `#[cfg(test)] mod tests` wäre die Funktion im `cfg(test)`-freien
+    Durchlauf `dead_code` und würde die Verify-Gate durch `-D warnings` rot
+    machen. `pub`-Elemente sind von diesem Lint ausgenommen, weil eine
+    Bibliothek externe Nutzung nicht ausschließen kann — eine ehrliche
+    Lösung hier, weil die Funktion tatsächlich als Teil der öffentlichen
+    Schnittstelle für #12s `open_remote` gedacht ist, nicht als Umgehung des
+    Lints.
+  - Die Session-Aufzählung ist zweischichtig: `audio-win::sources` (die
+    einzige Stelle mit `wasapi`- und `sysinfo`-Aufrufen) übersetzt
+    `wasapi::AudioSessionControl`/`SessionState` und `sysinfo::Process` in
+    die plattformneutralen Typen `RenderSession`/`SessionActivity`
+    (`sessions.rs`) und `ProcessSnapshot` (`process_tree.rs`), über die die
+    drei geforderten gerätefreien Logiktests laufen
+    (`process_tree/tests.rs`, `sessions/tests.rs`). `SessionActivity`
+    dupliziert `wasapi::SessionState`s drei Varianten unter eigenem Namen,
+    statt den Typ direkt zu verwenden, damit `sessions.rs` `wasapi` nicht
+    importieren muss.
+  - Die Prozessbaum-Auflösung (`resolve_tree_root`) stoppt vor dem Wechsel zu
+    einem Eltern-PID in drei Fällen zusätzlich zur Stop-Liste selbst: ein
+    Zyklus (Eltern-PID bereits im aktuellen Lauf besucht), ein verwaistes
+    Eltern-PID ohne Prozess-Tabellen-Eintrag, und — am Einstieg — ein
+    bereits stop-gelisteter Start-PID. Alle drei sind durch je einen
+    gerätefreien Test belegt (`walk_terminates_on_a_cycle_...`,
+    `walk_stops_at_an_orphaned_parent_...`), nicht nur durch die
+    Stop-Namen/PIDs selbst.
