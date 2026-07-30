@@ -452,6 +452,73 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     hält `push()` in O(1) unabhängig von der Leserzahl — der konkrete Mechanismus
     hinter der Spec-Zusage, dass der Fan-out an ASR und VAD in Phase 2/3 rein
     additiv wird, ohne den Ringpuffer selbst anzufassen.
+- 2026-07-30: Issue #6 (`audio`-Downmix und -Resampling) legt vier
+  Detailentscheidungen fest:
+  - **Downmix vor Resampling**, nicht danach: die Kanäle werden per
+    arithmetischem Mittel auf mono gemischt, bevor `rubato` läuft. Mitteln
+    zweier Kanäle erzeugt keine Frequenz, die im Quellsignal nicht schon
+    vorhanden war — die Reihenfolge kann also selbst kein Aliasing erzeugen —
+    und halbiert nebenbei die Sample-Menge, die der Resampler filtern muss.
+    Die eigentliche Anti-Alias-Filterung bleibt vollständig `rubato`s Aufgabe.
+  - `rubato::FftFixedInOut` statt eines `Sinc*`-Resamplers: bei 48 kHz → 16 kHz
+    ist das Verhältnis exakt 3:1, genau der Fall, für den dieser Resampler-Typ
+    gebaut ist. Sein Anti-Alias-Cutoff wird aus `fft_size_in`/`fft_size_out`
+    automatisch knapp **unterhalb** der Ziel-Nyquist-Frequenz gelegt (bei
+    16 kHz Ziel real bei rund 7,3 kHz, nicht erst bei 8 kHz — `rubato`s
+    `BlackmanHarris2`-Fenster liegt bewusst auf der sicheren Seite) — ohne
+    dass eigene Sinc-Parameter (`f_cutoff`, `sinc_len`, Fenster) von Hand
+    kalibriert werden müssen, was die Fehlerfläche für ein falsch
+    konfiguriertes Filter auf null reduziert. Eingabe-Chunk-Größe: als
+    **Wunschgröße** 480 Frames (10 ms bei 48 kHz) an `FftFixedInOut::new`
+    übergeben, aber `StreamResampler` liest die tatsächliche Chunk-Größe über
+    `input_frames_next()`/`output_frames_next()` zurück, statt die
+    Wunschgröße weiterzuverwenden — bei 48 kHz → 16 kHz (3:1) bleibt sie
+    unverändert bei 480/160, bei anderen Raten (z. B. 44,1 kHz, wo `rubato`
+    auf 882 Frames aufrundet) nicht. Ein erster Entwurf verwendete die
+    Wunschgröße direkt weiter; das Review vor dem Merge deckte auf, dass das
+    für jede Rate außer 48 kHz **jeden** `process_into_buffer`-Aufruf
+    fehlschlagen ließ und über den Fehlerpfad in `resample_one_chunk` die
+    gesamte Audiospur lautlos verwarf. Ein Regressionstest gegen 44,1 kHz
+    belegt die Korrektur.
+  - Der Resampler-Zustand (der FFT-Overlap-Tail, das Downmix-Restsample unter
+    einem vollen Frame, die noch nicht abgeholten resampelten Samples) liegt
+    vollständig in `StreamResampler`, gebunden an genau einen `ReaderId` bei
+    Konstruktion. Zwei Leser desselben Ringpuffers bekommen zwei Instanzen —
+    das macht den Fan-out aus Phase 2/3 rein additiv (eine weitere Instanz je
+    zusätzlichem Leser, kein gemeinsamer Zustand, den ein langsamer Leser
+    verderben könnte). Belegt durch einen Test mit zwei Lesern in
+    unterschiedlichem Lesetempo, die byte-identische Ausgabe liefern.
+  - Der synthetische Sinus für den Resampling-Test lebt ausschließlich im
+    Testmodul (`crates/audio/src/resample/tests.rs`), nicht als öffentliche
+    API — die Testton-Quelle samt `SourceFactory` ist Issue #7s Fläche, nicht
+    diese.
+  - **Zeroizing statt `Vec<f32>`:** die vier PCM-haltigen Felder von
+    `StreamResampler` (`raw_scratch`, `raw_leftover`, `mono_pending`,
+    `output_ready`) liegen in `Zeroizing<Vec<f32>>`, wie `RingBuffer::storage`
+    und `Frame::Samples::samples` es bereits tun — die Constitution fordert
+    das Nullen für PCM-Puffer allgemein, nicht nur für den Ringpuffer selbst.
+    Ein Review vor dem Merge deckte auf, dass ein erster Entwurf hier vier
+    unzeroisierte Felder plus zwei unzeroisierte temporäre `Vec`s pro
+    resampeltem Chunk hatte. Behoben durch zwei Änderungen: die vier Felder
+    bekamen `Zeroizing` **und** eine feste Erst-Kapazität in `new()`
+    (`chunk_frames_in`/`chunk_frames_out`), und `downmix`/`resample_one_chunk`
+    wurden umgeschrieben, um direkt in diesen Feldern zu arbeiten (Slices
+    ansehen, dann `drain`/`truncate`), statt pro Aufruf einen frischen `Vec`
+    zu bauen — damit existiert während einer Sitzung kein PCM-Sample mehr
+    außerhalb der vier `Zeroizing`-Felder und von `rubato`s eigenem
+    FFT-Overlap-Zustand (der von außen nicht zeroisierbar ist, siehe Risiko
+    unten). Reduziert nebenbei die Allokationen im Lesepfad auf praktisch
+    null im eingeschwungenen Zustand.
+  - Zwei bewusst zurückgestellte Folgefragen, als eigene Issues erfasst statt
+    nur hier vermerkt: [#33](https://github.com/bhemsen/transcriber/issues/33)
+    (`StreamResampler` prüft `RingBuffer`/`StreamFormat`-Zusammengehörigkeit
+    nicht strukturell) und
+    [#34](https://github.com/bhemsen/transcriber/issues/34) (Gruppenlaufzeit
+    von `rubato` und der nicht abrufbare Rest unter einer vollen Chunk-Größe
+    am Sitzungsende sind weder dokumentiert noch abfließbar). Beide sind kein
+    Bruch der Zusagen dieser Phase — `rubato`s eigener FFT-Zustand bleibt
+    ohnehin außerhalb der `Zeroizing`-Reichweite, unabhängig vom Ausgang von
+    #34.
 - 2026-07-30: Issue #8 (Quell-, Manifest- und Graph-Audit) legt drei
   Detailentscheidungen fest, die die Spec offen ließ:
   - Der Symbol-Scan normalisiert Whitespace vor dem Vergleich (alle
