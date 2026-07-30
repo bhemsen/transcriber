@@ -16,11 +16,18 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 - [ ] Aus **beiden** Strömen entsteht während der Sitzung fortlaufend Text, je mit
       absoluten Zeitstempeln auf der Sitzungs-Zeitachse aus Phase 1.
 - [ ] Auf dem GPU-Pfad liegt der Live-Rohtext des `Remote`-Stroms **≤ 5 s** hinter
-      dem Gesprochenen — gemessen als `Hop + Inferenzzeit + Pipeline-Overhead`, mit
-      einer harten Schranke von **≤ 2,0 s Inferenz je Fenster**.
+      dem Gesprochenen: `Hop 3 s + Inferenz ≤ 1,7 s + Overhead ≤ 0,3 s`. **Bewusste
+      Eingrenzung eines normativen Kriteriums:** `docs/vision.md` nennt „Live-Rohtext
+      ≤ 5 s" ohne Strom-Angabe; diese Spec bindet es an `Remote` und gibt `Local` ein
+      eigenes, größeres Budget (siehe die Durchsatz-Ungleichung unten).
+- [ ] Die **Durchsatz-Ungleichung** hält: `Σ Inferenz je Hop ≤ Hop` über beide
+      Ströme. Ohne sie fällt die Erkennung unbegrenzt zurück, statt nur die Latenz zu
+      reißen.
 - [ ] Auf einer GPU mit 8 GB VRAM greift Stufe 1 der Ladder; ohne nutzbare GPU greift
       eine CPU-Stufe und erzeugt korrekten Text (die Latenz dort: siehe die offene
       Entscheidung unten).
+- [ ] Jedes Segment verweist über eine `ProvenanceId` auf die Ladder-Stufe, die es
+      erzeugt hat — ein Stufenwechsel mitten in der Sitzung ist am Segment sichtbar.
 - [ ] Die WER liegt auf dem definierten **englischen** Referenzsample **≤ 15 %**.
 - [ ] Die WER liegt auf dem definierten **deutschen** Referenzsample **≤ 15 %**.
 - [ ] Das Modell wird nicht aus dem Repository und nicht aus dem Installer geladen,
@@ -28,11 +35,10 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
       Cache-Verzeichnis.
 - [ ] `session` hält das Transkript autoritativ im Arbeitsspeicher; ein
       zurückgefallener Event-Abonnent verliert **keinen** Protokolltext.
-- [ ] Jedes Segment trägt seine Herkunft: Modell, Quantisierung, Backend, Sprache und
-      die Ladder-Stufe.
 - [ ] `asr` hat weiterhin keinen Schreib- und keinen Netzpfad; der Audit-Test bewacht
-      es ab dieser Phase mit und belegt, dass ein HTTP-Client nur in `provisioning`
-      vorkommt.
+      es ab dieser Phase mit und belegt, dass ein HTTP-Client in keinem
+      **ausgelieferten** Crate außer `provisioning` vorkommt. `xtask` ist ausdrücklich
+      ausgenommen — es wird nie ausgeliefert und holt die Referenzsamples.
 - [ ] `cargo xtask verify` bleibt grün, lokal und in CI, **ohne** ein Modell zu laden
       — mit gemessener und in `docs/workflow.md` korrigierter Laufzeit.
 - [ ] Kein Foundation-Dokument widerspricht mehr dem Code (Liste in In scope).
@@ -45,8 +51,10 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
   Ladder, Sprachwahl, Deduplizierung des Überlappungsbereichs.
 - Crate `provisioning` (neu, minimal): versionierte **Modell**-Allowlist,
   SHA-256-Prüfung, Cache-Verzeichnis. Der einzige Netzzugriff im ausgelieferten Stand.
-- Crate `core`: `TranscriptSegment { id, stream, t0, t1, text, state }`,
-  `TranscriptProvenance`, `Language`.
+- Crate `core`: `TranscriptSegment { id, stream, t0, t1, text, state, provenance }`
+  — wobei `provenance: ProvenanceId` auf einen sitzungsweiten Eintrag verweist, statt
+  Modell- und Backend-Namen je Segment zu duplizieren. Dazu
+  `TranscriptProvenance`, `ProvenanceId`, `SessionOffset`, `Language`.
 - Crate `session`: `asr` als Leser an je einem Ringpuffer-Cursor aus Phase 1;
   **autoritativer** Transkript-Speicher im RAM; Transkript-Ereignisse als
   Benachrichtigung über den bestehenden Event-Bus.
@@ -73,6 +81,23 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
      wird auf das korrigiert, was gilt.
   5. `docs/workflow.md`: die gemessene Verify-Dauer, die die Datei nach Phase 2
      ausdrücklich neu gemessen haben will.
+  6. `docs/architecture.md`, `session`-Zeile und Flow 2: dort ist das Transkript
+     ausschließlich „Event an die Oberfläche". Mit dem autoritativen
+     Transkript-Speicher unten ist das unvollständig — die Zeile bekommt den
+     Speicher, der Bus die Rolle der Benachrichtigung.
+  7. **`docs/constitution.md`, Don'ts, und `CLAUDE.md`, Regel 1** — die Ausnahme für
+     öffentliche Benchmark-Samples. Entwurf, am Gate zu bestätigen: *„Ausgenommen ist
+     ein öffentliches, permissiv lizenziertes Sprach-Benchmark-Sample, das
+     ausschließlich ein Entwickler-Werkzeug (`cargo xtask wer`) außerhalb des
+     Repositories ablegt, um die WER-Kriterien zu messen. Die ausgelieferte Anwendung
+     schreibt weiterhin unter keinen Umständen Audio, und Audio aus einer Sitzung
+     wird nie gespeichert."* Beide Dokumente werden geändert, nicht nur eines: die
+     Constitution deckt das Speichern, `CLAUDE.md` Regel 1 deckt mit „kein ‚nur für
+     diesen Test'" den Zweck. Eine Spec-lokale Ausnahme genügt nicht — Specs werden
+     nach `docs/specs/archive/` verschoben, das Verbot bliebe absolut zurück.
+  8. Abhängig von der Antwort auf OPEN 1: `docs/constitution.md`, Tech stack, nennt
+     eine „CUDA-/Vulkan-/CPU-Ladder". Wird genau ein GPU-Backend ausgeliefert, wird
+     die Zeile unwahr und ist mitzuziehen.
 
 ### Out of scope
 
@@ -109,7 +134,7 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
   | Crate | Zweck | Lizenz | Allowlist |
   | --- | --- | --- | --- |
   | `whisper-rs`, `whisper-rs-sys` | Engine-Bindung | **Unlicense** | **fehlt** — als `[licenses] exceptions` auf genau diese zwei begrenzen, nicht global erlauben |
-  | `ureq` | HTTP für den Modell-Download | MIT/Apache-2.0 | gedeckt |
+  | `ureq` | HTTP für den Modell-Download in `provisioning` **und** für den Referenzsample-Bezug in `xtask` | MIT/Apache-2.0 | gedeckt |
   | `sha2` | Prüfsumme | MIT/Apache-2.0 | gedeckt |
   | `directories` | Cache-Verzeichnis im Nutzerprofil | MIT/Apache-2.0 | gedeckt |
   | Edit-Distanz (WER), nur `dev`/`xtask` | WER-Rechnung | zu prüfen | vor Nutzung prüfen |
@@ -125,6 +150,10 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 - Die GitHub-`windows-latest`-Runner haben kein Audiogerät und keine nutzbare GPU.
   **CI lädt kein Modell**: alle Tests dort laufen gegen eine skriptbare
   `SpeechToText`-Attrappe.
+- **CI baut ohne GPU-Feature** (reiner CPU-Build), damit auf dem Runner kein
+  Vulkan-SDK oder CUDA-Toolkit installiert werden muss. Offengelegte Folge: dass der
+  GPU-Feature-Build **kompiliert**, prüft CI nicht — das belegt der lokale
+  `cargo xtask build` am QA-Gate, und er ist dort ein eigener Akzeptanzpunkt.
 - **Versionsstand:** geprüft wurde `whisper-rs` **0.14.3** (Quelltext, 2026-07-30).
   Aktuell ist die 0.16er-Reihe, und `0.15.0` ist **yanked** — `deny.toml` hat
   `yanked = "deny"`. Gepinnt wird auf die aktuelle, nicht-yanked Minor; die zwei
@@ -167,10 +196,10 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 
 | Decision | Rationale | Date |
 |---|---|---|
-| `trait SpeechToText { fn transcribe(&mut self, pcm_16k_mono: &[f32], window_start: SessionOffset, language: Language) -> Result<Vec<RawSegment>, AsrError>; fn provenance(&self) -> TranscriptProvenance; }` — `RawSegment` trägt **fensterrelative** Zeiten und Text | `&mut self`, weil die whisper-Implementierung einen `WhisperState` hält. Die Eingabe ist bereits 16 kHz mono, also genau das, was der Resampler aus Phase 1 auf der Leseseite liefert. Fensterrelative Zeiten, weil nur der Scheduler die absolute Achse kennt | 2026-07-30 |
+| `trait SpeechToText { fn transcribe(&mut self, pcm_16k_mono: &[f32], language: Language) -> Result<Vec<RawSegment>, AsrError>; fn provenance(&self) -> TranscriptProvenance; }`. `RawSegment` (in `asr`) trägt **fensterrelative** Zeiten und Text; `SessionOffset` und `ProvenanceId` liegen in `core` | `&mut self`, weil die whisper-Implementierung einen `WhisperState` hält. Die Eingabe ist bereits 16 kHz mono, also genau das, was der Resampler aus Phase 1 liefert. **Kein** `window_start`-Argument: die Implementierung darf die absolute Achse gar nicht kennen, sonst wäre der Parameter ein ungenutztes Versprechen — der Scheduler addiert den Offset | 2026-07-30 |
 | Die **Ladder liegt über dem Trait**, nicht darin: sie wählt Backend, Modell und Fensterparameter und konstruiert daraus eine `SpeechToText`-Implementierung | Sonst müsste jede künftige Engine die Ladder-Logik nachbauen, und die Zusage „Parakeet kommt ohne Änderung an der Pipeline dazu" wäre unbelegt | 2026-07-30 |
 | Beide Ströme werden transkribiert, über **einen** `WhisperContext` mit **zwei** `WhisperState`s, seriell je Hop — nicht parallel | Phase 3 und 4 brauchen den `Local`-Text für das strukturelle „Ich" (`docs/architecture.md`, Flow 3); nur `Remote` zu transkribieren würde diese Phase formal grün abnehmbar machen und Phase 3 einen halben Datenpfad hinterlassen. Ein Kontext spart den doppelten Modellspeicher; seriell, weil zwei gleichzeitige GPU-Läufe die Latenz beider verschlechtern statt einen zu beschleunigen | 2026-07-30 |
-| Reicht die Kapazität nicht für beide Ströme, behält **`Remote` Priorität** und `Local` stuft zuerst ab (größerer Hop) | Der Nutzer weiß, was er selbst gesagt hat; die Gegenseite ist der Grund, warum das Werkzeug existiert. Die Abstufung wird gemeldet, nicht verschwiegen | 2026-07-30 |
+| Reicht die Kapazität nicht für beide Ströme, behält **`Remote` Priorität**: `Local` stuft zuerst ab, indem sein Hop über den Nennwert von 9 s hinaus vergrößert wird | Der Nutzer weiß, was er selbst gesagt hat; die Gegenseite ist der Grund, warum das Werkzeug existiert. Die Abstufung wird gemeldet, nicht verschwiegen. Der konkrete Nennwert und die Ungleichung, aus der er folgt, stehen unten — ohne sie wäre „stuft zuerst ab" eine Absicht ohne Zahl | 2026-07-30 |
 | Sprachwahl je Sitzung: `de`, `en` oder `auto`. `auto` erkennt **einmal** auf den ersten Sekunden des `Remote`-Stroms und wird dann festgeschrieben | Pro Fenster neu zu erkennen erzeugt Sprachwechsel mitten im Gespräch, die schlechter sind als eine falsche, aber stabile Wahl | 2026-07-30 |
 
 ### Fenster-Scheduling und die Latenzrechnung
@@ -179,7 +208,8 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 |---|---|---|
 | Der **Redundanzfaktor** ist explizit: `Kontext ÷ Hop`. Bei 15 s Kontext und 3 s Hop wird jede Sekunde Audio **fünfmal** encodiert. Über zwei Ströme verdoppelt sich das | Das ist die Größe, die die Machbarkeit bestimmt, und sie fehlte in der ersten Fassung dieser Spec. Ohne sie wirkt „3 s Hop lässt 2 s für die Inferenz" wie eine Rechnung, ist aber keine | 2026-07-30 |
 | `audio_ctx` wird **gesetzt** (`set_audio_ctx`), passend zur Kontextlänge — Richtwert 1500 für 30 s, also rund 768 für 15 s | Whispers Encoder hat eine **feste 30-s-Eingabe** und padded kürzeres Audio: ein 15-s-Fenster kostet ohne gesetztes `audio_ctx` genauso viel Encoder-Zeit wie ein 30-s-Fenster. Die Kontextverkürzung kauft also **nichts**, solange dieser Wert nicht gesetzt ist. Er ist qualitätswirksam (Halluzinationsrisiko bei zu kleinen Werten), deshalb: setzen, und den Effekt in der WER-Messung mitmessen | 2026-07-30 |
-| Harte Schranke statt „schneller als Echtzeit": **Inferenz ≤ 2,0 s je Fenster**, gemessen. Das QA-Kriterium lautet `Hop + Inferenz + Pipeline-Overhead ≤ 5 s` | „Schneller als Echtzeit" (1×) und „Inferenz kürzer als der Hop" (< 3 s) sind beide erfüllbar, während das 5-s-Kriterium reißt — bei 2,9 s Inferenz und 3 s Hop sind es 5,9 s. Die Akzeptanzpunkte müssen dasselbe messen wie die Vision | 2026-07-30 |
+| **Zwei getrennte Schranken**, weil Latenz und Durchsatz verschiedene Dinge sind. Latenz: `Hop + Inferenz + Overhead ≤ 5 s`, mit **Overhead ≤ 0,3 s** (Puffer-Lesen, Resampling, Dedup, Event) und daraus **Inferenz ≤ 1,7 s** je 15-s-Fenster. Durchsatz: **`Σ Inferenz je Hop ≤ Hop`** über **beide** Ströme | „Schneller als Echtzeit" (1×) und „Inferenz kürzer als der Hop" (< 3 s) sind beide erfüllbar, während das 5-s-Kriterium reißt. Die Inferenz-Schranke muss der **Rest** nach einem benannten Overhead sein, nicht gleich dem Budget: 3 s Hop + 2,0 s Inferenz sind bereits 5,0 s und lassen für den Overhead null. Und ohne die Durchsatz-Ungleichung reißt eine Stufe nicht bloß die Latenz — sie fällt **unbegrenzt** zurück | 2026-07-30 |
+| Deshalb hat `Local` einen **eigenen, größeren Hop**: nominal **9 s** gegen 3 s bei `Remote`. Damit kostet `Local` amortisiert rund ein Drittel von `Remote` je Remote-Hop, und die Ungleichung hält: `1,7 + 1,7/3 ≈ 2,3 s ≤ 3 s` | Bei gleichem Hop für beide Ströme wären es `1,7 + 1,7 = 3,4 s > 3 s` — Stufe 1 wäre in ihrer eigenen Nennkonfiguration dauerhaft im Rückstand, und die Ladder würde am ersten Tag abstufen. Der Preis ist rund 11 s Latenz auf `Local` (`9 + 1,7 + 0,3`), was die Remote-Priorität ausdrücklich in Kauf nimmt: der Nutzer weiß, was er selbst gesagt hat | 2026-07-30 |
 | Absolute Zeitachse: der Scheduler addiert den Fensteranfang auf der **Sitzungs-Zeitachse aus Phase 1** zu den fensterrelativen Zeiten des `RawSegment` | Genau die Nahtstelle, über die `docs/architecture.md`, Flow 3, die Sprecherlabels „über Zeitüberlappung" legt. Fensterrelative Zeiten wären dort unbrauchbar | 2026-07-30 |
 | **Dedup-Regel:** für den Überlappungsbereich gewinnt immer das **jüngere** Fenster. `Final` wird ein Segment, sobald es **vollständig vor** dem Commit-Horizont `jetzt − (Kontext − Hop)` liegt; der Schnitt fällt auf die letzte whisper-**Segmentgrenze** vor dem Horizont, nie mitten in ein Segment | Whisper tokenisiert dasselbe Audio in zwei Fenstern unterschiedlich, also ist ein Token-Vergleich (LCS) fragil. Die von whisper selbst gelieferten Segmentgrenzen sind die einzigen stabilen Schnittpunkte. „Jüngeres Fenster gewinnt" ist richtig, weil es mehr rechten Kontext hatte | 2026-07-30 |
 | Segmente haben eine **`id`** (monoton je Strom). `Provisional` → `Final` ist ein Ersetzen über diese `id`, kein Anhängen | Ohne Identität kann ein Konsument provisorischen Text nicht ersetzen, sondern nur doppelt anzeigen | 2026-07-30 |
@@ -188,20 +218,24 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 | Der Scheduler bekommt eine **injizierbare Zeitquelle** | Sonst braucht ein Test für zwei Fenstergrenzen ≥ 18 s Wanduhr-Zeit — in genau dem Verify, dessen Dauer diese Phase neu messen will | 2026-07-30 |
 
 ```
-Zeit ─────────────────────────────────────────────────────────────────▶
-                                                    jetzt ┤
-Ringpuffer   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  30 s, fest
+Sekunden   0    3    6    9   12   15   18   21   24   27   30
+Zeit  ─────┼────┼────┼────┼────┼────┼────┼────┼────┼────┼────▶ jetzt = 30
+Ringpuffer ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  30 s, fest
 
-Fenster n−1        ├────── 15 s Kontext ──────┤
-Fenster n             ├────── 15 s Kontext ──────┤
-Fenster n+1              ├────── 15 s Kontext ──────┤
-                         ├ 3 s ┤ Hop
+Remote, Hop 3 s, Kontext 15 s
+ Fenster n−1         ├───────── 15 s ─────────┤          (9 … 24)
+ Fenster n              ├───────── 15 s ─────────┤       (12 … 27)
+ Fenster n+1               ├───────── 15 s ─────────┤    (15 … 30)
+                        ├─3s─┤ Hop
 
-Commit-Horizont                       ┤ jetzt − (15 − 3) = jetzt − 12 s
-                   ─── Final ─────────┤├───── Provisional ─────┤
-                   (aus dem Fenster       (wird bei jedem Hop
-                    gelaufen, Schnitt      neu erzeugt, jüngeres
-                    auf Segmentgrenze)     Fenster gewinnt)
+Commit-Horizont                 ┤ jetzt − (15 − 3) = 18
+ Segmente  ──── Final ──────────┤├───────── Provisional ────────┤
+            (Schnitt auf einer     (bei jedem Hop neu; das
+             whisper-Segment-        jüngere Fenster gewinnt)
+             grenze vor 18 s)
+
+Local, Hop 9 s — ein Fenster je drei Remote-Hops
+ Fenster m                 ├───────── 15 s ─────────┤    (15 … 30)
 ```
 
 Ein Segment wird also rund 12–15 s nach dem Gesprochenen `Final`, während
@@ -210,11 +244,17 @@ bezieht sich auf **Live-Rohtext**, also auf `Provisional`.
 
 ### Ladder-Stufen
 
-| Stufe | Backend | Modell | Kontext / Hop | Redundanz | Latenz-Erwartung |
-| --- | --- | --- | --- | --- | --- |
-| 1 | GPU | `large-v3-turbo` q5_0 | 15 s / 3 s | 5× | ≤ 5 s, Kriterium gehalten |
-| 2 | CPU | `small` | 10 s / 5 s | 2× | > 5 s erwartet — siehe offene Entscheidung |
-| 3 | CPU | `base` | 10 s / 5 s | 2× | > 5 s erwartet |
+| Stufe | Backend | Modell | Kontext | Hop `Remote` | Hop `Local` | Redundanz `Remote` | Inferenz-Schranke | Latenz `Remote` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | GPU | `large-v3-turbo` q5_0 | 15 s | 3 s | 9 s | 5× | ≤ 1,7 s | ≤ 5 s, Kriterium gehalten |
+| 2 | CPU | `small` | 10 s | 5 s | 15 s | 2× | ≤ 3,7 s | > 5 s erwartet — siehe OPEN 3 |
+| 3 | CPU | `base` | 10 s | 5 s | 15 s | 2× | ≤ 3,7 s | > 5 s erwartet |
+
+Die Inferenz-Schranke je Stufe ist `Hop − Overhead` für die Latenz und muss zugleich
+`Σ je Hop ≤ Hop` erfüllen. Stufe 3 ist die letzte: hält **sie** die
+Durchsatz-Ungleichung nicht, gibt es nichts darunter, und die Sitzung fällt
+unbegrenzt zurück. Das ist der Fall, den OPEN 3 mitentscheiden muss — nicht bloß
+„die Latenz ist schlechter".
 
 | Decision | Rationale | Date |
 |---|---|---|
@@ -245,7 +285,7 @@ bezieht sich auf **Live-Rohtext**, also auf `Provisional`.
 | Kein `/loopkit:design`-Zyklus. Das Diagramm oben ist Teil der Spec, **nicht** eine Durable form nach `docs/design.md` | Phase 2 hat keine UI-Fläche, und die Live-Textansicht der CLI ist Textausgabe — der Verzicht ist auf diesem Grund legitim. Die Durable-form-Regel gilt für das Ergebnis eines Design-Zyklus; da keiner läuft, gibt es kein Artefakt, das ihr genügen müsste | 2026-07-30 |
 | OPEN — GPU-Ladder: die Backends von `whisper-rs` sind Compile-Time-Features, ein Binary trägt genau eines. `docs/constitution.md` nennt „CUDA-/Vulkan-/CPU-Ladder", was so nicht in **einen** Installer passt | resolved at the spec-acceptance gate | — |
 | OPEN — deutsches Referenzsample: es existiert kein permissiv lizenziertes deutsches **Meeting**-Korpus. Das Outcome fordert weiter ≤ 15 %; offen ist, **welches** Sample gemessen wird | resolved at the spec-acceptance gate | — |
-| OPEN — darf der CPU-Pfad das 5-s-Latenzkriterium verfehlen? `docs/vision.md` führt „Latenz ≤ 5 s" und „funktionierender CPU-Fallback" als **getrennte** Kriterien; die Rechnung oben zeigt, dass eine CPU-Stufe die 5 s realistisch nicht hält | resolved at the spec-acceptance gate | — |
+| OPEN — darf der CPU-Pfad das 5-s-Latenzkriterium verfehlen? `docs/vision.md` führt „Latenz ≤ 5 s" und „funktionierender CPU-Fallback" als **getrennte** Kriterien; die Rechnung oben zeigt, dass eine CPU-Stufe die 5 s realistisch nicht hält. **Ein „ja" ändert ein normatives Vision-Kriterium** und zieht wie die Audio-Ausnahme eine Dokumentänderung nach sich, ist also keine Spec-Detailfrage. Mitzuentscheiden ist der härtere Teil: hält Stufe 3 auch die **Durchsatz**-Ungleichung nicht, fällt die Sitzung unbegrenzt zurück, und darunter liegt nichts mehr | resolved at the spec-acceptance gate | — |
 
 ## Tracking
 
@@ -293,8 +333,13 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
 - [ ] **Latenz GPU:** gesprochener Satz erscheint als provisorischer Rohtext ≤ 5 s
       später. Protokolliert werden Hop, gemessene Inferenzzeit je Fenster und der
       Pipeline-Overhead — die Summe ist das Kriterium, nicht die Inferenz allein.
-- [ ] **Inferenz-Schranke:** ≤ 2,0 s je 15-s-Fenster auf der 8-GB-GPU, mit gesetztem
-      `audio_ctx`, bei zwei aktiven Strömen.
+- [ ] **Inferenz-Schranke:** ≤ 1,7 s je 15-s-Fenster auf der 8-GB-GPU, mit gesetztem
+      `audio_ctx`, bei zwei aktiven Strömen — und der gemessene Overhead ≤ 0,3 s.
+- [ ] **Durchsatz:** über eine zehnminütige Sitzung gilt `Σ Inferenz je Hop ≤ Hop`;
+      der Rückstand wächst nicht monoton. Das ist die Prüfung, die eine dauerhaft
+      zurückfallende Stufe von einer bloß langsamen unterscheidet.
+- [ ] **`Local`-Hop:** `Local` läuft nominal mit 9 s Hop, und beide Ströme zusammen
+      halten die Ungleichung.
 - [ ] **CPU-Fallback:** GPU deaktiviert → die Sitzung läuft auf Stufe 2 weiter, die
       Herkunftsangabe zeigt den Wechsel, die Latenz wird gemessen und gegen die am
       Gate getroffene Entscheidung bewertet.
@@ -314,7 +359,8 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
 
 | Risk | Mitigation |
 |---|---|
-| Die 5-s-Latenz wird trotz gesetztem `audio_ctx` verfehlt, weil zwei Ströme × 5× Redundanz die GPU überfordern | Die Inferenz-Schranke von 2,0 s ist ein eigener, früh messbarer Akzeptanzpunkt. Reißt sie, sind die Hebel in dieser Reihenfolge: `audio_ctx` senken, Kontext auf 10 s verkürzen, `Local` seltener transkribieren. Alle drei sind Konfiguration, keine Umbauten |
+| Die 5-s-Latenz wird trotz gesetztem `audio_ctx` verfehlt, weil zwei Ströme × 5× Redundanz die GPU überfordern | Latenz- **und** Durchsatz-Schranke sind getrennte, früh messbare Akzeptanzpunkte — die eine zu halten belegt die andere nicht. Reißt eine, sind die Hebel in dieser Reihenfolge: `audio_ctx` senken, `Local`-Hop über 9 s hinaus vergrößern, Kontext auf 10 s verkürzen. Alle drei sind Konfiguration, keine Umbauten |
+| Der autoritative Transkript-Speicher wächst mit der Gesprächsdauer, während Phase 1 „Speicherverbrauch unabhängig von der Laufzeit konstant" zusagt | Kein Widerspruch, aber eine Präzisierung wert: die Zusage aus Phase 1 gilt dem **Audio**-Ringpuffer. Text wächst, und zwar in einer Größenordnung (einige zehn KB je Stunde), die neben 23 MB Ringpuffer nicht ins Gewicht fällt |
 | Ein zu kleines `audio_ctx` verschlechtert die Qualität oder erzeugt Halluzinationen | Der gewählte Wert wird mit jeder WER-Zahl dokumentiert, damit Qualität und Latenz gegeneinander sichtbar sind statt einzeln optimiert |
 | q5_0 kostet gegenüber f16 genug WER, um das englische 15-%-Ziel zu reißen | f16 ist der benannte Ausweg; dann ist das Download-Kriterium für Phase 6 neu zu bewerten. Die Messung entscheidet, nicht die Annahme |
 | Die WER auf dem deutschen Sample verfehlt 15 %, weil das Sample kein Meeting ist | Die Sample-Wahl ist eine Gate-Entscheidung. Das Ergebnis wird mit der Sample-Herkunft dokumentiert; verfehlt es das Ziel, ist die Frage „falsches Sample oder falsches Modell" — und das Kriterium bleibt ≤ 15 %, statt auf „gemessen" abgesenkt zu werden |
@@ -325,13 +371,17 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
 
 ## Decision log
 
-- 2026-07-30: `whisper-rs` v0.14.3 in einem lesenden, wegwerfbaren Klon außerhalb des
-  Repos geprüft. Belegt: die GPU-Backends sind **Compile-Time-Features** (`cuda`,
-  `vulkan`, `metal`, `hipblas`, `intel-sycl`, `coreml`), es gibt keinen
-  Streaming-Beispielpfad in der Bindung, `log_backend` existiert, und `use_gpu` ist
-  zur Laufzeit umschaltbar mit `cfg!(feature = "_gpu")` als Default. Genauigkeit
-  nachgetragen: `coreml` setzt `_gpu` **nicht**, ist für Windows aber folgenlos. Kein
-  externer Code ins Repo übernommen.
+- 2026-07-30: `whisper-rs` in einem lesenden, wegwerfbaren Klon außerhalb des Repos
+  geprüft — **des Default-Branches**, der sich in `Cargo.toml` als 0.14.3 ausgibt,
+  aber der **veröffentlichten** 0.14.3 voraus ist. Der Stand ist also „master", nicht
+  0.14.3; die frühere Etikettierung war falsch. Belegt (und gegen die zu pinnende
+  Version erneut zu belegen, siehe Constraints): die GPU-Backends sind
+  **Compile-Time-Features** (`cuda`, `vulkan`, `metal`, `hipblas`, `coreml`, auf
+  master zusätzlich `intel-sycl`), es gibt keinen Streaming-Beispielpfad in der
+  Bindung, `log_backend` existiert, und `use_gpu` ist zur Laufzeit umschaltbar mit
+  `cfg!(feature = "_gpu")` als Default. `coreml` setzt `_gpu` **nicht**, für Windows
+  folgenlos. Gevendorte C-Quellen sieht `cargo deny` nicht — deren MIT-Status ist für
+  die NOTICE relevant, nicht für das Gate. Kein externer Code ins Repo übernommen.
 - 2026-07-30: Lizenz von `whisper-rs`/`whisper-rs-sys` ist **Unlicense** und fehlt in
   der `deny.toml`-Allowlist — ein vorab gefundener Merge-Blocker. Eingetragen wird er
   als auf diese zwei Crates begrenzte `exceptions`, nicht als globale Erlaubnis.
@@ -352,8 +402,20 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   hatte keinen autoritativen Speicher, lag also allein auf einem verlustbehafteten
   Bus; und zwei CI-Tests hätten ein Modell geladen — genau das, womit die Spec die
   Auslagerung der WER-Messung begründet.
-- 2026-07-30: Eine Feststellung des Reviews **nicht** übernommen: `intel-sycl` sei
-  erst ab 0.16.0 vorhanden. Die geprüfte 0.14.3-`Cargo.toml` führt
-  `intel-sycl = ["whisper-rs-sys/intel-sycl", "_gpu"]`. Der Rest des Befundes
-  (`coreml` ohne `_gpu`; gevendorte C-Quellen sind für `cargo deny` unsichtbar) ist
-  übernommen.
+- 2026-07-30: Zweite Review-Runde. Der Reviewer hatte mit `intel-sycl` recht: es fehlt
+  in der **veröffentlichten** 0.14.3 und kam erst mit 0.16.0. Der Widerspruch dagegen
+  stützte sich auf einen `--depth 1`-Klon des Default-Branches, dessen `Cargo.toml`
+  die Versionsnummer 0.14.3 trägt, aber neuer ist. Daraus folgt mehr als eine
+  Korrektur: jede Aussage jenes Eintrags ist an einen Branch statt an eine Version
+  gebunden, weshalb der Eintrag oben umbenannt ist und die Constraints eine erneute
+  Prüfung gegen die gepinnte Version verlangen.
+- 2026-07-30: Ebenfalls aus Runde zwei behoben — die Durchsatzfrage, die von der
+  Latenzfrage getrennt ist: eine Inferenz-Schranke von 2,0 s bei 3 s Hop lässt für
+  den Overhead null, und zwei Ströme mit gleichem Hop brauchen 3,4 s je 3-s-Hop, wären
+  also in der Nennkonfiguration dauerhaft im Rückstand. Jetzt: Overhead ≤ 0,3 s,
+  Inferenz ≤ 1,7 s, `Σ Inferenz je Hop ≤ Hop`, und `Local` bekommt einen eigenen Hop
+  von 9 s. Dazu geschlossen: der Audit-Invariant, den das eigene `xtask`-Werkzeug
+  gebrochen hätte; das fehlende CI-Feature-Set; die Heimat von `RawSegment`,
+  `SessionOffset` und der Segment-Herkunft; und die Korrekturliste, die die
+  zugesagte Constitution-Änderung nicht enthielt und sie damit aus der Definition von
+  „fertig" herausfallen ließ.
