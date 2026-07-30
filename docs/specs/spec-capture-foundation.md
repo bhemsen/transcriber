@@ -1118,8 +1118,10 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
     `compile_fail`-Fixtures und die übrigen `session`-Tests in denselben
     Prozessraum wie die FS-Beobachtung gezogen, ohne einen Vorteil zu bieten.
     Der Kindprozess führt eine **ganze** Sitzung: `TestToneSources` mit
-    `with_total_frames`, `Session::start`, 200 ms Erfassungsfenster, dann
-    `Session::stop()` — nicht nur Start und sofortiges Beenden.
+    `with_total_frames`, `Session::start`, 100 ms Erfassungsfenster, dann
+    `Session::stop()` — nicht nur Start und sofortiges Beenden. (Der
+    Erfassungsfenster-Wert wurde in der Review-Runde unten von 200 ms auf
+    100 ms gesenkt; dieser Absatz nennt den aktuellen Stand.)
   - **Kein neuer Parameter auf `Session::start`.** Das „frische Arbeitsverzeichnis,
     das die Sitzung bekommt" wird durch `Command::current_dir` auf den
     Kindprozess realisiert, nicht durch eine Signaturänderung an `Session`
@@ -1181,7 +1183,12 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   - Zurückgestellt, keine Entscheidung dieses Issues: ob `session` in
     `xtask::audit::GUARDED_CRATES` aufgenommen wird, bleibt die offene, an die
     Planung weitergereichte Frage aus Issue #9s Decision-Log-Eintrag — dieses
-    Issue fügt `session` dort nicht hinzu.
+    Issue fügt `session` dort nicht hinzu. **Nachtrag aus der zweiten
+    Review-Runde unten:** `crates/session/src/bin/fs_audit_child.rs` selbst
+    enthält drei `fs::write`-Aufrufe (die env-gated Leak-/Transient-Write-
+    Simulation für die Detektor-Tests). Wer diese Entscheidung aufgreift,
+    muss diese Datei ausnehmen oder verschieben, sonst bricht die Aufnahme
+    von `session` in `GUARDED_CRATES` sofort an ihrem eigenen Test-Harness.
   - Ein Review vor dem Merge (frischer Agent, Opus), empirisch statt nur
     lesend — es reproduzierte tatsächliche Fehlschläge, nicht nur
     Vermutungen —, deckte drei echte Funde auf, alle behoben:
@@ -1193,21 +1200,45 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
       reale Geräte-Wartezeit abarbeitet, blieb für eine geschriebene und
       wieder gelöschte Datei nur ein 1–2 Polls breites Fenster; eine
       injizierte Schreib-Warte-Lösch-Sequenz mit 5 ms Haltezeit entkam
-      reproduzierbar 10 von 10 Läufen. Behoben durch zwei Änderungen: das
-      Poll-Intervall sinkt auf 2 ms (`POLL_INTERVAL`), und `TOTAL_FRAMES` im
-      Kindprozess steigt von 48 000 auf 2 000 000, damit beide
-      Erfassungs-Threads spürbar länger tatsächlich beschäftigt sind. Mit
-      diesen Werten fing der Test dieselbe injizierte Sequenz in eigenen
-      Wiederholungsläufen **10 von 10 Malen bei 5 ms Haltezeit, 10 von 10 bei
-      1 ms und 15 von 15 sogar bei 0 ms** (Schreiben und sofortiges Löschen,
-      ohne Wartezeit dazwischen) — ein deutlich stärkeres empirisches
-      Ergebnis als erwartet, aber ausdrücklich **keine** mathematische
-      Garantie: kein aus einem separaten Prozess pollendes Verfahren kann das
-      ohne einen Betriebssystem-Dateisystem-Watch zusichern, den diese Phase
-      bewusst nicht einführt (neue Abhängigkeit, zusätzliche Komplexität,
-      unverhältnismäßig für ein gerätefreies Phase-1-Gate). Der Modul-Kommentar
-      in `tests/fs_audit.rs` benennt diese Grenze jetzt explizit, und ein
-      neuer, über einen echten Kindprozess laufender Test
+      reproduzierbar 10 von 10 Läufen. Behoben: das Poll-Intervall sinkt von
+      15 ms auf 2 ms (`POLL_INTERVAL`) — und **das allein** ist der Hebel.
+      Eine zweite Review-Runde (ebenfalls Opus, empirisch) stellte eine
+      Gegenprobe an, die die erste Fassung dieses Eintrags nicht gemacht
+      hatte: 48 000 Frames (alter Wert) mit 2 ms Poll-Intervall fängt die
+      Sequenz weiterhin zuverlässig, während 2 000 000 Frames mit dem alten
+      15-ms-Intervall sie durchgehend verfehlt. `TOTAL_FRAMES` trägt zur
+      Erkennung dieser konkreten Sequenz **nichts** bei — sie läuft
+      synchron auf dem Haupt-Thread des Kindprozesses, direkt nach
+      `Session::start`, entkoppelt von der Auslastung der
+      Erfassungs-Threads, die `TOTAL_FRAMES` steuert. Der Wert bleibt trotzdem
+      bei 2 000 000, aus einem eigenständigen, von diesem Fund unabhängigen
+      Grund: er hält beide Erfassungs-Threads über einen deutlich größeren
+      Teil der Kindprozess-Laufzeit tatsächlich mit echten
+      `RingBuffer`-Schreibzugriffen beschäftigt, was dem **Haupttest**
+      (nicht dem Transient-Write-Test) mehr Poll-Gelegenheiten während
+      echter Thread-Aktivität gibt — falls ein künftiger Fehler dort
+      transient in den Ring-Puffer-Pfad schriebe. Mit dem korrigierten
+      2-ms-Intervall allein fing der Test dieselbe injizierte Sequenz in
+      eigenen Wiederholungsläufen **10 von 10 Malen bei 5 ms Haltezeit,
+      10 von 10 bei 1 ms und 15 von 15 sogar bei 0 ms** (Schreiben und
+      sofortiges Löschen, ohne Wartezeit dazwischen) — ein deutlich
+      stärkeres empirisches Ergebnis als erwartet, aber ausdrücklich
+      **keine** mathematische Garantie: kein aus einem separaten Prozess
+      pollendes Verfahren kann das ohne einen Betriebssystem-Dateisystem-Watch
+      zusichern, den diese Phase bewusst nicht einführt (neue Abhängigkeit,
+      zusätzliche Komplexität, unverhältnismäßig für ein gerätefreies
+      Phase-1-Gate). Der wahrscheinlichste Grund, warum 2 ms fängt, was
+      15 ms verfehlte: `fs::write` und `fs::remove_file` selbst brauchen
+      messbare Wall-Clock-Zeit (Kernel-Overhead, auf Windows zusätzlich
+      durch Virenscanner-Filtertreiber verlängerbar), in der ein enges
+      Poll-Intervall die Datei noch sieht. Das ist plattform- und
+      umgebungsabhängig, keine von uns erzwungene Eigenschaft — der Grund,
+      warum dies eine empirische Verbesserung bleibt, keine Garantie, und
+      warum die konkreten Trefferquoten oben als Beleg für **dieses**
+      Setup gelten, nicht als portable Kennzahl. Der Modul-Kommentar in
+      `tests/fs_audit.rs` benennt beide Punkte jetzt explizit (die Grenze
+      und dass `POLL_INTERVAL`, nicht `TOTAL_FRAMES`, sie verschiebt), und
+      ein neuer, über einen echten Kindprozess laufender Test
       (`catches_a_transient_write_that_outlives_the_poll_interval`, mit 50 ms
       Haltezeit — großzügiger Sicherheitsabstand für einen langsameren
       CI-Runner) belegt die Seite der Zusage, die tatsächlich eingelöst wird,
@@ -1246,3 +1277,57 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
       (ein Spawn-Fehlschlag hätte sonst beide Verzeichnisse zurückgelassen).
       Und der Haupttest bekam dieselbe „frisches Verzeichnis ist leer"-
       Sanity-Assertion, die der Detektor-Test schon hatte.
+  - Eine zweite Review-Runde (wieder ein frischer Agent, Opus, wieder
+    empirisch — sie stellte die Gegenprobe an, die die erste Runde nicht
+    gemacht hatte) bestätigte die drei strukturellen Fixe der ersten Runde
+    als echt und wirksam, fand aber, dass der Decision-Log-Eintrag selbst
+    drei falsche Tatsachenbehauptungen über die eigene Korrektur enthielt —
+    derselbe Fehlertyp wie Runde 1, nur auf der Dokumentationsebene statt im
+    Code:
+    - Die Behauptung, `TOTAL_FRAMES` trage neben `POLL_INTERVAL` zur
+      Transient-Write-Erkennung bei, war falsch (siehe die korrigierte
+      Fassung des Fund-Absatzes oben — jetzt mit der Gegenprobe belegt, die
+      das aufdeckte).
+    - Ein „200 ms Erfassungsfenster" in der Routen-Beschreibung oben widersprach
+      dem tatsächlichen, in derselben Runde auf 100 ms gesenkten
+      `CAPTURE_WINDOW` — korrigiert.
+    - Die Behauptung, der Haupttest habe dieselbe Sanity-Assertion wie der
+      Detektor-Test bekommen, war zum Zeitpunkt des Schreibens schlicht
+      nicht wahr — die Assertion war nie hinzugefügt worden. Jetzt nachgezogen
+      (siehe oben).
+    Zusätzlich zwei echte, bis dahin unbenannte Lücken: der Modul-Kommentar
+    behauptete „Machine proof … für den ganzen `session`-Orchestrator",
+    obwohl der Audit ausschließlich zwei benannte Verzeichnisse beobachtet —
+    ein Schreibzugriff auf einen absoluten Pfad außerhalb beider (z. B.
+    `%LOCALAPPDATA%`) bliebe unsichtbar, und `session` hat mangels
+    `GUARDED_CRATES`-Mitgliedschaft auch keinen Symbol-Level-Rückfallschutz
+    dagegen. Der Modul-Kommentar in `tests/fs_audit.rs` benennt diese Grenze
+    jetzt als eigenes „Honest limit #2" neben der Timing-Grenze. Und:
+    `crates/session/src/bin/fs_audit_child.rs` enthält selbst drei
+    `fs::write`-Aufrufe (die env-gated Leak- und Transient-Write-Simulation)
+    — genau das Symbol, das `xtask`s Blockliste für bewachte Crates ächtet.
+    Träfe die oben zurückgestellte Entscheidung, `session` in
+    `xtask::audit::GUARDED_CRATES` aufzunehmen, bräche dieser Test-Kindprozess
+    den Audit sofort, sofern er nicht ausdrücklich ausgenommen oder verschoben
+    wird — festgehalten hier, damit die Planung diese Abhängigkeit kennt,
+    statt sie erst beim Bauen zu entdecken. Schließlich, als günstige
+    Härtung ohne eigenen Fund dahinter: `spawn_child` entfernt jetzt beide
+    Detektor-Umgebungsvariablen explizit (`Command::env_remove`), bevor es
+    `extra_env` anwendet, damit eine zufällig in der aufrufenden Shell
+    gesetzte Variable nicht in den Haupt-Audit durchschlagen könnte (die
+    einzige mögliche Richtung wäre ohnehin ein lauteres Scheitern, nie ein
+    stilles Bestehen — trotzdem sauberer, sich nicht darauf zu verlassen).
+    Ein Selbst-Fund direkt danach, von keiner der beiden Runden benannt: die
+    zwei neuen Tests plus die korrigierte Dokumentation trieben
+    `fs_audit.rs` auf 425 Zeilen — über die 400-Zeilen-Modulgrenze der
+    Constitution, von `too_many_lines` nicht erfasst (der Lint misst nur
+    Funktionslänge, nicht Moduldateigröße; dieselbe Lücke, die Issue #9
+    schon einmal für `session.rs` aufgedeckt hatte). Behoben nach demselben
+    Muster wie `xtask/tests/no_write_paths.rs` + `audit/mod.rs`: die
+    gemeinsame Spawn-/Poll-/Snapshot-Maschinerie wandert nach
+    `crates/session/tests/harness/mod.rs` (Unterverzeichnis plus `mod.rs`,
+    nicht ein blankes `harness.rs` direkt unter `tests/`, aus demselben
+    Grund, den Issue #8 für `audit/mod.rs` dokumentiert: sonst entdeckt
+    Cargo die Datei als zweites, eigenständiges Test-Target). `fs_audit.rs`
+    behält nur `mod harness;`, die vier `#[test]`-Funktionen und den
+    Modul-Kommentar — danach 233 bzw. 211 Zeilen.
