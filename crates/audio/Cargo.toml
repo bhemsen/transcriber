@@ -1,0 +1,15 @@
+[package]
+name = "transcriber-audio"
+description = "PCM frame and format types, and the fixed-size per-stream ring buffer. No I/O, no HTTP client."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = "2"
+zeroize = "1"
+
+[lints]
+workspace = true
