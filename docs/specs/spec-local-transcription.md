@@ -25,8 +25,9 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
       Erkennung unbegrenzt zurück statt nur die Latenz zu reißen; ohne die zweite
       überspringen die Fenster Audio, statt es zu überlappen.
 - [ ] Auf einer GPU mit 8 GB VRAM greift Stufe 1 der Ladder; ohne nutzbare GPU greift
-      eine CPU-Stufe und erzeugt korrekten Text (die Latenz dort: siehe die offene
-      Entscheidung unten).
+      eine CPU-Stufe und erzeugt korrekten Text. Deren Latenz und Kapazität werden am
+      QA-Gate **gemessen** und speisen danach Korrektur 9 an `docs/vision.md` — sie
+      sind hier bewusst keine Zusage.
 - [ ] Jedes Segment verweist über eine `ProvenanceId` auf die Ladder-Stufe, die es
       erzeugt hat — ein Stufenwechsel mitten in der Sitzung ist am Segment sichtbar.
 - [ ] Die WER liegt auf dem definierten **englischen** Referenzsample **≤ 15 %**.
@@ -96,14 +97,16 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
      Constitution deckt das Speichern, `CLAUDE.md` Regel 1 deckt mit „kein ‚nur für
      diesen Test'" den Zweck. Eine Spec-lokale Ausnahme genügt nicht — Specs werden
      nach `docs/specs/archive/` verschoben, das Verbot bliebe absolut zurück.
-  8. Abhängig von der Antwort auf OPEN 1: `docs/constitution.md`, Tech stack, nennt
-     eine „CUDA-/Vulkan-/CPU-Ladder". Wird genau ein GPU-Backend ausgeliefert, wird
-     die Zeile unwahr und ist mitzuziehen.
-  9. Abhängig von der Antwort auf OPEN 3: darf der CPU-Pfad die 5 s verfehlen, ist
-     **`docs/vision.md`, Success criteria**, mitzuziehen — die Zeile „Latenz:
-     Live-Rohtext ≤ 5 s hinter dem Gesprochenen" gilt dann für den GPU-Pfad, und der
-     CPU-Fallback bekommt eine eigene, benannte Erwartung. Ein normatives Kriterium
-     wird nicht durch eine Spec eingeschränkt, sondern im Vision-Dokument.
+  8. `docs/constitution.md`, Tech stack, nennt eine „CUDA-/Vulkan-/CPU-Ladder".
+     Ausgeliefert wird genau **Vulkan** (Gate-Entscheidung), also ist die Zeile
+     mitzuziehen.
+  9. **Nach der QA-Messung, nicht davor:** `docs/vision.md`, Success criteria — die
+     Zeile „Latenz: Live-Rohtext ≤ 5 s hinter dem Gesprochenen" wird mit den am
+     QA-Gate gemessenen CPU-Zahlen präzisiert (der GPU-Pfad hält sie; der
+     CPU-Fallback bekommt eine eigene, **gemessene** Erwartung). Bekannte Folgearbeit
+     dieser Phase, kein offener Punkt: ein normatives Kriterium wird im
+     Vision-Dokument geändert, nicht in einer Spec, und mit einer gemessenen statt
+     einer geschätzten Zahl.
 
 ### Out of scope
 
@@ -306,13 +309,13 @@ OPEN 3 — nicht bloß „die Latenz ist schlechter".
 | Die WER-Messung ist **opt-in** (`cargo xtask wer`), nicht Teil von Verify. Verify lädt **kein** Modell; alle CI-Tests laufen gegen eine skriptbare `SpeechToText`-Attrappe | Verify ist das Gate je Iteration und muss schnell und netzfrei bleiben. Ein CI-Test, der ein Modell lädt, unterläuft genau die Begründung, mit der die WER-Messung ausgelagert wird | 2026-07-30 |
 | WER wird nach festgeschriebener Normalisierung gemessen (Kleinschreibung, Satzzeichen entfernt, Zahlwörter vereinheitlicht), Normalisierung mit dem Ergebnis dokumentiert | Ohne festgeschriebene Normalisierung ist die Zahl nicht vergleichbar — man kann sie über die Regelwahl um mehrere Punkte verschieben | 2026-07-30 |
 | Kein `/loopkit:design`-Zyklus. Das Diagramm oben ist Teil der Spec, **nicht** eine Durable form nach `docs/design.md` | Phase 2 hat keine UI-Fläche, und die Live-Textansicht der CLI ist Textausgabe — der Verzicht ist auf diesem Grund legitim. Die Durable-form-Regel gilt für das Ergebnis eines Design-Zyklus; da keiner läuft, gibt es kein Artefakt, das ihr genügen müsste | 2026-07-30 |
-| OPEN — GPU-Ladder: die Backends von `whisper-rs` sind Compile-Time-Features, ein Binary trägt genau eines. `docs/constitution.md` nennt „CUDA-/Vulkan-/CPU-Ladder", was so nicht in **einen** Installer passt | resolved at the spec-acceptance gate | — |
-| OPEN — deutsches Referenzsample: es existiert kein permissiv lizenziertes deutsches **Meeting**-Korpus. Das Outcome fordert weiter ≤ 15 %; offen ist, **welches** Sample gemessen wird | resolved at the spec-acceptance gate | — |
-| OPEN — darf der CPU-Pfad das 5-s-Latenzkriterium verfehlen? `docs/vision.md` führt „Latenz ≤ 5 s" und „funktionierender CPU-Fallback" als **getrennte** Kriterien; die Rechnung oben zeigt, dass eine CPU-Stufe die 5 s nicht hält, weil schon der Hop 5 s beträgt. **Ein „ja" ändert `docs/vision.md`, Success criteria** — Korrektur 9 zieht die Zeile dann mit, genau wie Korrektur 7 die Audio-Ausnahme. Es ist keine Spec-Detailfrage. Mitzuentscheiden ist der härtere Teil: hält Stufe 3 auch die **Kapazitäts**-Ungleichung nicht, fällt die Sitzung unbegrenzt zurück, und darunter liegt nichts mehr | resolved at the spec-acceptance gate | — |
+| Ausgeliefert wird **genau ein GPU-Backend: Vulkan**, in **einem** Binärprogramm, mit CPU-Fallback zur Laufzeit über `use_gpu(false)` | Am Spec-Acceptance-Gate entschieden. Vulkan deckt NVIDIA, AMD und Intel mit einem Artefakt; CUDA wäre auf NVIDIA rund 1,5–2× schneller, aber das Latenzbudget trägt auch ohne. Zwei Installer würden den Nutzer vor eine Variantenwahl stellen — genau die Hürde, die „Time-to-first-protocol ≤ 15 Minuten" gefährdet. Damit werden die Korrekturen 4 und 8 **unbedingt**: sowohl `docs/prior-art.md` („zur Laufzeit gewähltes Backend") als auch `docs/constitution.md` („CUDA-/Vulkan-/CPU-Ladder") werden auf das korrigiert, was gilt | 2026-07-30 |
+| Deutsches Referenzsample: **VoxPopuli DE** (CC0), als **offengelegter Ersatz** dokumentiert. Das Kriterium bleibt ≤ 15 % | Am Spec-Acceptance-Gate entschieden. Es existiert kein permissiv lizenziertes deutsches Meeting-Korpus; VoxPopuli ist spontane Mehrsprecher-Sprache, aber parlamentarisch. Automatisierbar und reproduzierbar, und damit ein Gate, das bei jeder ASR-Änderung läuft — ein selbst aufgenommenes Sample wäre treffender, würde das WER-Issue aber bis zu seiner Lieferung blockieren und wäre das einzige Audio, das dieses Projekt selbst aufbewahrt. Verfehlt die Messung 15 %, ist die erste Frage „Sample oder Modell", und der Ersatzcharakter ist mit jeder Zahl dokumentiert | 2026-07-30 |
+| CPU-Latenz: **erst messen, dann `docs/vision.md` ändern.** Die CPU-Stufen werden gebaut wie in der Ladder-Tabelle; am QA-Gate werden ihre tatsächliche Latenz **und** ob sie die Kapazitätsungleichung halten gemessen, und erst mit diesen Zahlen wird `docs/vision.md`, Success criteria, präzisiert (Korrektur 9) | Am Spec-Acceptance-Gate entschieden. Gebaut wird ohnehin dasselbe — nur der Wortlaut des Kriteriums hängt am Ergebnis. Ein normatives Kriterium jetzt mit einer geschätzten Zahl zu ändern wäre schlechter als es mit einer gemessenen zu ändern. Korrektur 9 bleibt als **bekannte Folgearbeit** vorgemerkt, nicht als offene Frage: dass die Zeile fällt, ist absehbar; **wie** sie neu lautet, entscheidet die Messung. Der härtere Teil bleibt im Blick: hält Stufe 3 die Kapazitätsungleichung nicht, fällt die Sitzung unbegrenzt zurück und darunter liegt nichts mehr — dann ist es kein Latenz-, sondern ein Machbarkeitsbefund | 2026-07-30 |
 
 ## Tracking
 
-- Milestone: Phase 2 — Lokale Transkription (angelegt am Spec-Acceptance-Gate)
+- Milestone: [Phase 2 — Lokale Transkription](https://github.com/bhemsen/transcriber/milestone/2)
 - Issues: entstehen aus dieser Spec, sobald sie gemergt ist
 - `Depends on milestone: #1`. Die Issues, die Ringpuffer, Sitzung und CLI berühren,
   tragen Cross-Milestone-Kanten auf die entsprechenden Phase-1-Issues.
@@ -367,9 +370,12 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
 - [ ] **Reihenfolge:** `Remote` läuft in jedem Hop zuerst; ein `Local`-Fenster
       verschlechtert die `Remote`-Latenz messbar **nicht** (Vergleich einer Sitzung mit
       und ohne `Local`-Strom).
-- [ ] **CPU-Fallback:** GPU deaktiviert → die Sitzung läuft auf Stufe 2 weiter, die
-      Herkunftsangabe zeigt den Wechsel, die Latenz wird gemessen und gegen die am
-      Gate getroffene Entscheidung bewertet.
+- [ ] **CPU-Fallback:** GPU deaktiviert → die Sitzung läuft auf Stufe 2 weiter und
+      die Herkunftsangabe zeigt den Wechsel. **Gemessen und protokolliert werden zwei
+      Größen:** die tatsächliche Latenz und ob die Kapazitätsungleichung
+      `I_Remote + I_Local ≤ Hop` hält. Sie sind die Eingabe für Korrektur 9 an
+      `docs/vision.md`. Hält Stufe 3 die Kapazität nicht, ist das ein
+      Machbarkeitsbefund, kein Latenzbefund.
 - [ ] **WER Englisch:** `cargo xtask wer` auf dem festgelegten AMI-Auszug ergibt
       ≤ 15 %, mit dokumentierter Normalisierung und `audio_ctx`-Wert.
 - [ ] **WER Deutsch:** ≤ 15 % auf dem am Gate gewählten Sample, gleiche
@@ -470,3 +476,11 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   hängt an Korrektur 9, statt seine Dokumentfolge nur zu erwähnen; und das Diagramm
   hat seine erfundene Skala verloren — die Klammerwerte sind maßgeblich, die Balken
   sind schematisch.
+- 2026-07-30: Spec-Acceptance-Gate. Drei Punkte entschieden. Ausgeliefert wird genau
+  **Vulkan** in einem Binärprogramm — damit werden die Korrekturen an
+  `docs/prior-art.md` und `docs/constitution.md` unbedingt, statt an einer offenen
+  Frage zu hängen. Das deutsche Referenzsample ist **VoxPopuli DE** als offengelegter
+  Ersatz, bei unverändertem Kriterium ≤ 15 %. Und die CPU-Latenz wird erst **gemessen**
+  und dann in `docs/vision.md` präzisiert, statt ein normatives Kriterium jetzt mit
+  einer Schätzung zu ändern; Korrektur 9 ist damit bekannte Folgearbeit, kein offener
+  Punkt. Keine Entscheidung dieser Phase ist mehr offen.
