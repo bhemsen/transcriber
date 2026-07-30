@@ -22,14 +22,15 @@
 
 - GitHub repo: `bhemsen/transcriber` — https://github.com/bhemsen/transcriber
 - Base / integration branch: `main`
-- GitHub Project board: **noch nicht angelegt** — verpflichtend, die Queue und die
-  Statusanzeige der Loops. Statuswerte: `Todo`, `In Progress`, `Done` — eine
-  Anzeige, **kein** Claim und kein Lock (siehe Orchestration).
+- GitHub Project board: **7** — https://github.com/users/bhemsen/projects/7
+  (Projekt-ID `PVT_kwHOA6WZjM4Be40R`), verlinkt mit dem Repo. Verpflichtend: die
+  Queue und die Statusanzeige der Loops. Statuswerte: `Todo`, `In Progress`,
+  `Done` — eine Anzeige, **kein** Claim und kein Lock (siehe Orchestration).
 - Board field-ID recipe (damit die Loops den Status ohne Neu-Ermittlung setzen):
-  ProjectV2-Status-Feld `<status-field-id>`; Option-IDs — Todo
-  `<todo-option-id>`, In Progress `<in-progress-option-id>`, Done
-  `<done-option-id>`. Neu ableiten mit `gh project field-list <number> --owner
-  <owner> --format json --jq '.fields[]|select(.name=="Status")'`.
+  ProjectV2-Status-Feld `PVTSSF_lAHOA6WZjM4Be40RzhZPumA`; Option-IDs — Todo
+  `f75ad846`, In Progress `47fc9ee4`, Done `98236657`. Neu ableiten mit
+  `gh project field-list 7 --owner bhemsen --format json --jq
+  '.fields[]|select(.name=="Status")'`.
 
 `/loopkit:plan` braucht ein GitHub-Repo; Specs sind lokal die einzige Quelle der
 Wahrheit, Milestones und Issues werden daraus auf GitHub erzeugt.
