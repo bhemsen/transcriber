@@ -9,7 +9,7 @@
 
 | Phase | Name | Spec | Milestone |
 |---|---|---|---|
-| 1 | Capture-Fundament Windows | — | — |
+| 1 | Capture-Fundament Windows | [spec](specs/spec-capture-foundation.md) | [#1](https://github.com/bhemsen/transcriber/milestone/1) |
 | 2 | Lokale Transkription | — | — |
 | 3 | Sprechertrennung | — | — |
 | 4 | Protokoll und Aufbewahrung | — | — |
@@ -26,8 +26,10 @@ Milestone-Link, sobald die Spec gemergt ist.
 
 - **Phase 1 — Capture-Fundament Windows.** Per-Prozess-Loopback und Mikrofon als
   zwei getrennte Ströme, fest dimensionierter Ringpuffer, Session-Zustandsmaschine
-  mit typseitigem Consent-Gate, CLI-Harness. Liefert die Quellen-Isolation und das
-  Consent-Kriterium.
+  mit typseitigem Consent-Gate, CLI-Harness. Dazu die betriebssystemseitige
+  Echokompensation auf dem Mikrofon-Strom — ohne sie bricht die strukturelle
+  Sprechertrennung, sobald der Nutzer Lautsprecher statt Kopfhörer verwendet.
+  Liefert die Quellen-Isolation und das Consent-Kriterium.
 - **Phase 2 — Lokale Transkription.** whisper-rs mit GPU-/CPU-Ladder,
   Fenster-Scheduling auf dem Live-Strom, definiertes deutsches und englisches
   Referenzsample samt WER-Messung. Liefert die Kriterien Transkriptqualität und
