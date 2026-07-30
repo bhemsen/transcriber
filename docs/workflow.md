@@ -52,7 +52,9 @@ Wahrheit, Milestones und Issues werden daraus auf GitHub erzeugt.
 - Verify: `cargo xtask verify` — `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`,
   `cargo deny check`, ab Phase 5 zusätzlich die Frontend-Checks.
-  (gemessene Dauer: `<noch nicht gemessen — Rust-Toolchain fehlt>`)
+  (gemessene Dauer: **15 s** auf dem leeren Skelett, gemessen 2026-07-30. Erwartung:
+  steigt mit `whisper-rs` und `sherpa-onnx` deutlich, weil beide native Bibliotheken
+  aus den Quellen bauen — nach Phase 2 neu messen und hier korrigieren.)
 - Test: `cargo test --workspace`
 - Build: `cargo xtask build` — `cargo build --workspace --all-targets`, ab Phase 5
   zusätzlich der Frontend-Build.

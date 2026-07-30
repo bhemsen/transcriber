@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": ["Bash", "WebFetch", "WebSearch"],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(git push --force)", "Bash(git push --force *)",
+      "Bash(git push -f)", "Bash(git push -f *)",
+      "Bash(git push --mirror*)",
+      "Bash(git reset --hard)", "Bash(git reset --hard *)",
+      "Bash(git clean -f*)",
+      "Bash(git branch -D *)",
+      "Bash(git checkout .)", "Bash(git restore .)",
+      "Bash(git filter-branch*)",
+      "PowerShell(Remove-Item -Recurse -Force *)",
+      "PowerShell(Remove-Item -Force -Recurse *)",
+      "PowerShell(rm -r*)",
+      "PowerShell(git push --force*)", "PowerShell(git push -f*)",
+      "PowerShell(git push --mirror*)",
+      "PowerShell(git reset --hard*)",
+      "PowerShell(git clean -f*)",
+      "PowerShell(git branch -D *)",
+      "PowerShell(git filter-branch*)"
+    ]
+  }
+}

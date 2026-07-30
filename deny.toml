@@ -26,6 +26,9 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.9
+# The allow list is deliberately broader than the current dependency graph, so an
+# entry nobody uses yet is expected — warning about it only buries real findings.
+unused-allowed-license = "allow"
 
 [bans]
 multiple-versions = "warn"

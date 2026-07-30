@@ -53,7 +53,14 @@ fn verify() -> Fallible {
     run("cargo", &["fmt", "--all", "--", "--check"])?;
     run(
         "cargo",
-        &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
+        &[
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
     )?;
     run("cargo", &["test", "--workspace"])?;
     run("cargo", &["deny", "check"])?;
