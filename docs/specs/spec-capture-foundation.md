@@ -27,9 +27,12 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
       Erfassungs-Crates.
 - [ ] Der Speicherverbrauch ist unabhängig von der Laufzeit konstant: die Kapazität
       des Ringpuffers verändert sich nie, ein zurückgefallener Leser meldet Verlust.
+- [ ] Bei Lautsprecher-Nutzung erscheint der Ton der Gegenseite nicht im `Local`-Strom
+      — die betriebssystemseitige Echokompensation ist aktiv, oder ihre Abwesenheit
+      ist offengelegt.
 - [ ] `cargo xtask verify` läuft lokal grün.
-- [ ] Die vier Widersprüche zwischen `docs/architecture.md`, `docs/constitution.md`
-      und dem Code sind in den Foundation-Docs aufgelöst (siehe In scope).
+- [ ] Kein Foundation-Dokument und kein Kommentar im Repo widerspricht mehr dem
+      Code — die belegten Widersprüche sind aufgelöst (Liste in In scope).
 
 ## Scope
 
@@ -55,8 +58,10 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 - Zwei Audit-Tests, beide in Verify: der Quell- und Manifest-Audit über die
   Erfassungs-Crates, und ein **gerätefreier Sitzungs-FS-Audit** (Testton-Quelle,
   Verzeichnis-Snapshot vor und nach einer Sitzung, 0 neue Dateien).
-- **Foundation-Doc-Korrekturen** — vier belegte Widersprüche, die diese Phase
-  auflöst, statt sie auf `main` stehen zu lassen:
+- **Foundation-Doc-Korrekturen** — die belegten Widersprüche zwischen
+  `docs/architecture.md`, `docs/constitution.md` und dem Code, die diese Phase
+  auflöst, statt sie auf `main` stehen zu lassen. Diese Liste ist die verbindliche
+  Aufzählung; sie wird als **ein** Schritt erledigt:
   1. `docs/architecture.md` weist `Session` der Crate `core` zu, beschreibt den
      Orchestrator aber in derselben Tabelle als `session`. `core` bekommt
      `SessionState` / `SessionId`, `session` bekommt `Session`.
@@ -69,6 +74,28 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
      Segment. `StreamIdentity` gehört nach `core`.
   4. Der Doc-Kommentar in `crates/core/src/lib.rs` kündigt `Session` für `core` an
      und wird mit Korrektur 1 mitgezogen.
+  5. `docs/architecture.md` nennt `audio-win` „das einzige Crate mit `unsafe`". Nach
+     dieser Phase hat **kein** Crate `unsafe` — die Zeile wird zu „das einzige Crate,
+     das die `unsafe`-Ausnahme ziehen **darf**, wenn ein konkreter Fall sie erzwingt".
+  6. Der Kommentar über `[workspace.lints.rust]` in `Cargo.toml` sagt, die
+     Plattform-Backends opteten bewusst **nicht** ein, „because they need `unsafe`".
+     Das ist die gefährlichste der Korrekturen: wer in Phase 8 oder 9 ein Backend
+     anlegt, liest sie als Anweisung, `[lints] workspace = true` weglassen — und
+     verliert damit lautlos `unsafe_code`, `missing_docs`, `too_many_lines`,
+     `unwrap_used` und `expect_used`. Der Kommentar wird zu: einopten, und **nur**
+     wenn die Ausnahme gezogen wird, alle Lints außer `unsafe_code` duplizieren.
+  7. `docs/architecture.md`, Boundaries, sagt „`session` → alle fachlichen Crates".
+     `session` kennt `audio-win` bewusst **nicht** (sonst wäre es plattformgebunden).
+     Präzisiert auf `core` + `audio`.
+  8. `docs/architecture.md`, Flow 1, schreibt `Session::start(consent)` ohne das
+     Argument, das die Quellen trägt — wird an die Signatur unten angeglichen.
+  9. `docs/constitution.md`, Don'ts, verbietet einen HTTP-Client in einer Crate
+     `capture`, die es im Komponenten-Plan nicht gibt. Gemeint sind `audio` und
+     `audio-win` — genau die Crates, die der Audit-Test bewacht. Ohne die Korrektur
+     zeigt ein Don't auf nichts.
+  10. `docs/workflow.md` sagt, ohne CMake und die C++-Build-Tools scheitere
+      Bootstrap. In Phase 1 ist Bootstrap nur `cargo fetch --locked`; die Aussage
+      gilt erst ab Phase 2 und wird entsprechend eingegrenzt.
 - Fundament-Nachzug aus Phase 0: Edition 2024, in `rust-toolchain.toml` gepinnte
   MSRV, GitHub-Actions-Workflow auf `windows-latest` — abhängig von der offenen
   Scope-Entscheidung unten.
@@ -163,9 +190,9 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 
 | Decision | Rationale | Date |
 |---|---|---|
-| `Session` liegt in `session`, nicht in `core`. Signatur: `Session::start(consent: ConsentAttestation, plan: CapturePlan) -> Result<Session, SessionError>`, wobei `CapturePlan` das gewählte `CaptureSubject` und die geöffneten `Box<dyn AudioSource>` trägt | Die Constitution schreibt `Session::start(consent: ConsentAttestation)` als Consent-Gate fest, sagt aber nichts über die übrigen Argumente. `core` ist laut `docs/architecture.md` I/O-frei — ein Orchestrator, der Capture-Threads besitzt, ist dort fehl am Platz. Der Consent bleibt das **erste** Argument und ohne ihn existiert kein Konstruktor | 2026-07-30 |
+| `Session` und `CapturePlan` liegen in `session`, nicht in `core`. Signatur: `Session::start(consent: ConsentAttestation, plan: CapturePlan) -> Result<Session, SessionError>`, wobei `CapturePlan` das gewählte `CaptureSubject` und die geöffneten `Box<dyn AudioSource>` trägt | Die Constitution schreibt `Session::start(consent: ConsentAttestation)` als Consent-Gate fest, sagt aber nichts über die übrigen Argumente. `core` ist laut `docs/architecture.md` I/O-frei — ein Orchestrator, der Capture-Threads besitzt, und ein Plan, der `Box<dyn AudioSource>` hält, sind dort fehl am Platz. Der Consent bleibt das **erste** Argument und ohne ihn existiert kein Konstruktor | 2026-07-30 |
 | Die Quellen werden über einen `SourceFactory`-Trait in `audio` geöffnet; `audio-win` liefert `WindowsSources`, `audio` liefert `TestToneSources`. `cli` ist der Composition Root und wählt die Implementierung | Hält `session` plattformfrei (kein `cfg` außerhalb des Backends) und macht die Testton-Quelle injizierbar — sonst ist keiner der `session`-Tests ohne Audiogerät lauffähig. `app` in Phase 5 benutzt dieselbe Fabrik, damit CLI und Oberfläche austauschbar bleiben | 2026-07-30 |
-| Zustände: `Idle → Capturing → Stopping → Ended`. Der einzige Übergang nach `Capturing` ist `Session::start` mit Attestation; `Ended` ist terminal, eine Sitzung wird nicht neu gestartet. Ein fehlendes Mikrofon ist ein **Attribut** der laufenden Sitzung (`local_stream: Option<…>`), kein Zustand | Vier Zustände und drei Kanten sind die vollständige Mechanik des Crates; sie gehören in die Spec, damit der Implementierer sie nicht erfindet. Mikrofon-Abwesenheit als Zustand würde die Kanten verdoppeln, ohne etwas zu unterscheiden | 2026-07-30 |
+| Zustände: `Capturing → Stopping → Ended`, zwei Kanten, `Ended` terminal — eine Sitzung wird nicht neu gestartet. Es gibt **keinen** `Idle`-Zustand: „untätig" ist die **Abwesenheit eines `Session`-Wertes**. Ein fehlendes Mikrofon ist ein **Attribut** der laufenden Sitzung (`local_stream: Option<…>`), kein Zustand | Ein `Idle`-Variante wäre unbeobachtbar, weil `Session::start` der einzige Konstruktor ist — eine lebende `Session` ist nie untätig. Sie weglassen macht das Consent-Gate stärker, nicht schwächer: solange keine Attestation vorliegt, existiert der Typ nicht, statt in einem Zustand zu warten. Mikrofon-Abwesenheit als Zustand würde die Kanten verdoppeln, ohne etwas zu unterscheiden | 2026-07-30 |
 | Ein fehlendes Mikrofon ist eine **Warnung**, kein Abbruch: die Sitzung läuft mit dem `Remote`-Strom allein weiter | Wer nur zuhört, soll ein Protokoll bekommen. Der `Local`-Strom fehlt dann sichtbar, statt die Sitzung zu verhindern | 2026-07-30 |
 | Der Event-Bus nutzt `tokio::sync::broadcast` (Feature `sync`, **keine** Runtime) | `docs/architecture.md` legt tokio für die Orchestrierung fest. `broadcast::Sender::send` funktioniert ohne laufende Runtime, also bleibt der Audiopfad synchron und Phase 5 kann async konsumieren, ohne den Bus zu ersetzen | 2026-07-30 |
 | Der Attestation-Text liegt als **versionierte Konstante in `core`** (DE + EN), nicht in `cli` oder im Frontend | `docs/design.md` fordert den Volltext im Dialog; `protocol` muss festhalten, welche Fassung attestiert wurde. Eine Quelle für CLI, künftige Oberfläche und Protokollkopf | 2026-07-30 |
@@ -178,7 +205,7 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 | Kapazität **30 s je Strom**, als benannte Konstante, beim Bau gegen die Obergrenze geprüft | Die Constitution nennt ≤ 30 s; der konkrete Wert fehlte und würde sonst erfunden. 30 s maximiert die Lag-Toleranz für die ASR-Fenster aus Phase 2 und kostet 11,5 MB je Strom | 2026-07-30 |
 | Der Ringpuffer vergibt **je Leser einen Cursor**; ein zurückgefallener Leser verliert Samples und erhält die Verlustzahl gemeldet, statt den Puffer wachsen zu lassen | Konstanter Speicherverbrauch ist eine Zusage der Constitution. Die Cursor-Form macht den Fan-out an ASR und VAD in Phase 2/3 rein additiv, ohne den Puffer neu zu schreiben | 2026-07-30 |
 | Jeder Strom trägt seine **eigene Zeitachse** aus `BufferInfo.timestamp` (Geräteposition, 100-ns-Einheiten), normalisiert auf eine gemeinsame Sitzungs-Null, die `Session::start` festhält | Mikrofon und virtuelles Loopback-Gerät haben unabhängige Uhren. `docs/architecture.md` legt die Sprecherlabels „über Zeitüberlappung" auf die Segmente — ohne eine gemeinsame Null ist diese Überlappung in Phase 3 nicht berechenbar. Wanduhr bei Ankunft wäre durch Puffer-Latenz verfälscht | 2026-07-30 |
-| `BufferFlags::data_discontinuity` erzeugt eine **explizite Lücke** auf der Zeitachse (Ereignis mit Zähler), `BufferFlags::silent` wird als Nullen materialisiert, damit die Achse dicht bleibt | Die Discontinuity-Flagge ist der eigentliche Lücken-Melder von WASAPI; wird sie ignoriert, verschiebt sich die Zeitachse still gegen die andere und die Sprecherzuordnung in Phase 3 driftet. Der Event-Timeout unten ist ein anderer Fall | 2026-07-30 |
+| Alle drei `BufferFlags` werden behandelt: `data_discontinuity` erzeugt eine **explizite Lücke** auf der Zeitachse (Ereignis mit Zähler), `silent` wird als Nullen materialisiert, damit die Achse dicht bleibt, und `timestamp_error` läuft in denselben Lücken-Pfad wie `data_discontinuity` — mit eigenem Zähler, weil er die gewählte Zeitbasis selbst für unzuverlässig erklärt | Die Discontinuity-Flagge ist der eigentliche Lücken-Melder von WASAPI; wird sie ignoriert, verschiebt sich die Zeitachse still gegen die andere und die Sprecherzuordnung in Phase 3 driftet. `timestamp_error` zu ignorieren wäre schlimmer: dann wird ein falscher Zeitstempel als gültig übernommen. Der Event-Timeout unten ist ein anderer Fall | 2026-07-30 |
 | Resampling auf 16 kHz mono passiert **auf der Leseseite in `audio`** (`rubato`), nicht im Backend; der Ringpuffer hält das native Format | `docs/architecture.md`, Flow 2 („Ringpuffer → Resampling → Fan-out"). Hält das Resampling in einem `forbid(unsafe_code)`-Crate, wo es ohne Audiogerät testbar ist | 2026-07-30 |
 | PCM-Puffer werden bei Sitzungsende **explizit genullt** (`zeroize`), nicht nur freigegeben | Die Constitution fordert das Nullen für Embeddings; für PCM ist es gleich billig und deckt die Zusage „nichts Audio-förmiges überlebt" auch im Arbeitsspeicher ab | 2026-07-30 |
 
@@ -188,11 +215,11 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 |---|---|---|
 | Loopback über `AudioClient::new_application_loopback_client(root_pid, include_tree = true)` | Am Quelltext geprüft: die Fähigkeit existiert als sichere Rust-API, `include_tree` bildet auf `PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE` ab. Kein eigener FFI-Code nötig | 2026-07-30 |
 | Beide Clients bekommen **explizit** 48 kHz, stereo, 32-bit Float, aber **getrennte** Modus-Parameter: Loopback `EventsShared { autoconvert: true, buffer_duration_hns: 0 }`, Mikrofon `EventsShared { autoconvert: true, buffer_duration_hns: min_time }` aus `get_device_period()` | `GetMixFormat` liefert auf einem Process-Loopback-Client `E_NOTIMPL`, das Format muss also gesetzt werden. `get_device_period` funktioniert auf demselben Client ebenfalls nicht — daher 0 dort und der echte Wert nur auf dem Mikrofon. Ein gemeinsames Format hält Resampler-Konfiguration und Puffergröße für beide Ströme identisch | 2026-07-30 |
-| Die Chunk-Größe kommt **ausschließlich** aus `get_next_packet_size()`; `get_buffer_size()` wird auf dem Loopback-Client nicht aufgerufen | `wasapi-rs` dokumentiert, dass `get_buffer_size` dort fehlerfrei absurde Werte liefert (Größenordnung 3·10⁹). Das Referenzbeispiel umgeht das mit einer **unbegrenzt reallokierenden** `VecDeque` — genau das Gegenteil von „fest dimensioniert, nie vergrößert". Wer das Beispiel abschreibt, baut den Verstoß mit ein | 2026-07-30 |
+| Die Chunk-Größe kommt **ausschließlich** aus `get_next_packet_size()` (Rückgabe `Option<u32>`; `None` bedeutet „nichts abzuholen", nicht „Fehler"); `get_buffer_size()` wird auf dem Loopback-Client nicht aufgerufen | `wasapi-rs` dokumentiert, dass `get_buffer_size` dort fehlerfrei absurde Werte liefert (Größenordnung 3·10⁹). Das Referenzbeispiel umgeht das mit einer **unbegrenzt reallokierenden** `VecDeque` — genau das Gegenteil von „fest dimensioniert, nie vergrößert". Wer das Beispiel abschreibt, baut den Verstoß mit ein | 2026-07-30 |
 | `get_audiosessioncontrol()` steht auf dem Loopback-Client nicht zur Verfügung; das Strom-Ende wird dort am Lesefehler erkannt | Ebenfalls in der Limitationsliste der Crate dokumentiert. Ohne diese Festlegung sucht der Implementierer einen Kanal, den es nicht gibt | 2026-07-30 |
 | Ein Timeout beim Warten auf das Capture-Event ist **Stille, kein Fehler** — er erhöht einen Zähler und die Erfassung läuft weiter. Nur ein invalidiertes Gerät beendet den Strom | Eine ausgewählte Anwendung, die gerade nichts abspielt, ist der Normalfall. Beide Referenzbeispiele behandeln den Timeout als fatal; für uns wäre das ein Abbruch bei jeder Gesprächspause | 2026-07-30 |
 | Die Anwendung wird auf ihre **Prozessbaum-Wurzel** aufgelöst, aber nur bis zu einer Stop-Liste (`explorer.exe`, `services.exe`, `svchost.exe`, `wininit.exe`, PID 0 und 4) | Das Referenzbeispiel warnt ausdrücklich: für Baum-Erfassung muss die **Eltern**-PID das Ziel sein, weil Call-Clients in Kindprozessen rendern. Ungebremstes Hochlaufen würde dagegen die Shell-Wurzel erfassen und die Quellen-Isolation brechen — genau das Kriterium dieser Phase. Die CLI zeigt die aufgelöste Wurzel **vor** der Consent-Abfrage | 2026-07-30 |
-| Die Quellenliste kommt aus den **Render**-Audio-Sessions, gefiltert auf `SessionState::Active`, dedupliziert je PID, ohne den eigenen Prozess und ohne PID 0 und 4. Prozessnamen und Elternschaft aus `sysinfo` | `get_audiosessionenumerator` liefert auch `Inactive` und `Expired` — ungefiltert stünden abgelaufene Sessions in der Auswahl. `docs/design.md` fordert die Filterung auf aktive Tonausgabe. `sysinfo` ist MIT und vermeidet weiteren Plattform-Code. Achtung: das Referenzbeispiel zählt `Direction::Capture` auf — wir brauchen `Direction::Render` | 2026-07-30 |
+| Die Quellenliste kommt aus den Audio-Sessions **aller** Render-Geräte der `Direction::Render`-Gerätesammlung, gefiltert auf `SessionState::Active`, ohne den eigenen Prozess und ohne PID 0 und 4, und **dedupliziert auf die aufgelöste Prozessbaum-Wurzel** — nicht auf die rohe Session-PID. Prozessnamen und Elternschaft aus `sysinfo` | `get_audiosessionenumerator` hängt am Gerät, nicht am System, also muss über die Gerätesammlung iteriert werden — die Endpunkt-Unabhängigkeit aus `docs/prior-art.md` gilt für den Erfassungs-Client, nicht für die Auflistung. Ungefiltert stünden `Inactive`- und `Expired`-Sessions in der Auswahl; `docs/design.md` fordert die Filterung auf aktive Tonausgabe. Dedup auf die Wurzel, weil zwei Kindprozesse desselben Clients sonst zwei identische Zeilen erzeugen. Achtung: das Referenzbeispiel zählt `Direction::Capture` auf — wir brauchen `Direction::Render` | 2026-07-30 |
 | Zwischen `list-sources` und `capture` wird die Prozess-Identität **neu geprüft** (Name und Startzeit), nicht nur die PID | Windows recycelt PIDs. Ohne die Prüfung könnte `capture` eine andere Anwendung erfassen als die, der der Nutzer zugestimmt hat — ein Consent-Bruch, nicht nur ein Bug | 2026-07-30 |
 | Echokompensation auf dem **Mikrofon**-Client: `Role::Communications` als Gerät, `StreamCategory::Communications` per `set_properties` **vor** `initialize_client`, danach `is_aec_supported()` → `get_aec_control()` → `set_echo_cancellation_render_endpoint(Some(render_endpoint_id))`. `initialize_mta()` läuft je Capture-Thread | Ohne AEC landet bei Lautsprecher-Nutzung der Ton der Gegenseite im `Local`-Strom und bricht das Kriterium „ich gegen Gegenseite 100 % korrekt". Der Weg kostet über die geprüfte API rund zehn Zeilen und hat eine eingebaute Fähigkeitsprobe. Die Reihenfolge ist bindend, und die Communications-**Kategorie** ist für einen Loopback-Stream ungültig — nur auf dem Mikrofon setzen | 2026-07-30 |
 
@@ -203,12 +230,12 @@ Prosa auf Deutsch, Identifier und Überschriften auf Englisch —
 | Der Quell-Audit liegt in `xtask/tests/no_write_paths.rs` — eine **bewusste Abweichung** von der Constitution, die den Pfad wörtlich als `tests/no_write_paths.rs` nennt | Der Workspace-Root ist ein virtuelles Manifest ohne Package, also kompiliert ein Wurzel-`tests/`-Verzeichnis nicht und `cargo test --workspace` würde den Test nie ausführen. `xtask` ist bereits die Heimat der Workspace-Gates. Die Abweichung wird am Spec-Acceptance-Gate offengelegt, nicht stillschweigend vollzogen | 2026-07-30 |
 | Der Audit prüft die Crate-Liste und überspringt noch nicht existierende Crates | Lässt den Test mit den Phasen wachsen, statt bei jeder neuen Phase zu brechen | 2026-07-30 |
 | Der Audit prüft **zusätzlich zur** Symbol-Blockliste der Constitution (`fs::write`, `fs::File::create`, `OpenOptions::write`, `reqwest`, `ureq`) auf `Serialize`/`serde` und wertet den **Abhängigkeitsgraphen** der Erfassungs-Crates aus | „Kein `Serialize` für Audio-Typen" ist ein Don't, das sich nicht als negative Trait-Zusicherung ausdrücken lässt. Ein Scan belegt nur die Abwesenheit **benannter** Symbole — die Manifest- und Graph-Prüfung schließt die Lücke, die ein Alias oder ein eigener `impl Write` sonst offen ließe | 2026-07-30 |
-| Der Sitzungs-FS-Audit läuft **in Phase 1**, gerätefrei über die Testton-Quelle | Die Constitution sagt „**bei jeder Änderung am Datenpfad** läuft zusätzlich der FS-Audit-Test" — Phase 1 *ist* der Datenpfad. `docs/workflow.md` macht ihn ab Phase 4 verpflichtend, was die frühere Zeile nicht aufhebt. Mit der Testton-Quelle ist er ohne Audiogerät lauffähig, also gibt es keinen Grund zu warten | 2026-07-30 |
+| Der Sitzungs-FS-Audit läuft **in Phase 1**, gerätefrei über die Testton-Quelle. Er beobachtet ein **prozess-eigenes** Verzeichnis: `TMP` und `TEMP` werden für die Testsitzung auf ein frisches Verzeichnis umgebogen, und nur dieses sowie das Arbeitsverzeichnis werden verglichen | Die Constitution sagt „**bei jeder Änderung am Datenpfad** läuft zusätzlich der FS-Audit-Test" — Phase 1 *ist* der Datenpfad. `docs/workflow.md` macht ihn ab Phase 4 verpflichtend, was die frühere Zeile nicht aufhebt. Mit der Testton-Quelle ist er ohne Audiogerät lauffähig. Das gemeinsame Temp-Verzeichnis zu vergleichen wäre derselbe Fehler wie ein Snapshot über das ganze Nutzerprofil: cargo und fremde Prozesse schreiben dort, das Gate würde sporadisch rot und damit wertlos | 2026-07-30 |
 | Das Consent-Gate wird per `compile_fail`-Fall (`trybuild`) belegt, nicht per Review-Urteil | Das Vision-Kriterium lautet „die Aufnahme startet **nachweisbar** nie ohne bestätigte Attestation". Ein Review ist eine Momentaufnahme, ein `compile_fail`-Fall ein Dauergate | 2026-07-30 |
 | Kein Design-Zyklus (`/loopkit:design`) in dieser Phase | Phase 1 liefert ein CLI-Harness, hat also keine UI-Fläche. Die Zustandsmaschine ist oben mit vier Zuständen und drei Kanten vollständig beschrieben — eine Visualisierung würde keine Entscheidung schärfen. Quellenauswahl und Consent-Dialog sind in `docs/design.md` als Komponenten festgelegt und werden in Phase 5 entworfen | 2026-07-30 |
 | OPEN — Wortlaut der Consent-Attestation (DE + EN), die vor jedem Start bestätigt wird | resolved at the spec-acceptance gate | — |
 | OPEN — Verhalten, wenn das Mikrofon keine Echokompensation unterstützt: warnen und weiterlaufen, oder Start verweigern, bis Kopfhörer bestätigt sind | resolved at the spec-acceptance gate | — |
-| OPEN — gehören die drei Fundament-Nachzüge aus Phase 0 (Edition 2024, gepinnte MSRV, CI-Workflow) in diese Phase? Die Alternative ist **nicht** von der Planung ausführbar: `track:adhoc`-Issues erzeugt laut `docs/workflow.md` der Mensch. Bei „nicht in dieser Phase" entfällt das CI-Outcome hier und der Mensch legt die Issues an | resolved at the spec-acceptance gate | — |
+| OPEN — gehören die drei Fundament-Nachzüge aus Phase 0 (Edition 2024, gepinnte MSRV, CI-Workflow) in diese Phase? Die Alternative ist **nicht** von der Planung ausführbar: `track:adhoc`-Issues erzeugt laut `docs/workflow.md` der Mensch. Bei „nicht in dieser Phase" entfällt der CI-Halbsatz in der Verification-Überschrift und der Mensch legt die Issues an | resolved at the spec-acceptance gate | — |
 
 ## Tracking
 
@@ -229,7 +256,8 @@ Maschinell, in Verify (und, je nach offener Entscheidung, in CI):
       gelisteten Symbole und keine der gelisteten Abhängigkeiten, und schlägt fehl,
       wenn eines eingeführt wird — einmal durch eine absichtliche Verletzung belegt.
 - [ ] Der Sitzungs-FS-Audit läuft eine Sitzung gegen die Testton-Quelle und findet
-      im Arbeits- und Temp-Verzeichnis 0 neue Dateien.
+      im Arbeitsverzeichnis und im **prozess-eigenen** Temp-Verzeichnis (`TMP`/`TEMP`
+      für die Testsitzung umgebogen) 0 neue Dateien.
 - [ ] `compile_fail`-Fall: ein `Session`-Start ohne `ConsentAttestation` kompiliert
       nicht.
 - [ ] Ringpuffer-Test gegen die Testton-Quelle: die Kapazität (`capacity()`) bleibt
@@ -306,14 +334,21 @@ Manuell am Milestone-QA-Gate (Smoke-Test nach `docs/workflow.md`):
   Fähigkeitsprobe, und ohne sie ist das Kriterium „ich gegen Gegenseite 100 %
   korrekt" bei Lautsprecher-Nutzung nicht erfüllt. `docs/roadmap.md` bekommt den
   Zusatz beim Merge mit.
-- 2026-07-30: Review des Spec-Entwurfs durch einen frischen Agenten hat vier
-  Widersprüche zwischen `docs/architecture.md`, `docs/constitution.md` und dem Code
-  aufgedeckt (Heimat von `Session`, `core`-Abhängigkeiten, Heimat von
-  `StreamIdentity`, Pfad des Audit-Tests) sowie zwei stillschweigende Abweichungen
-  von der Constitution (Audit-Test-Pfad, FS-Audit erst ab Phase 4). Alle sind jetzt
-  benannt und einem Schritt dieser Phase zugeordnet, statt auf `main` stehen zu
-  bleiben.
+- 2026-07-30: Zwei Review-Runden durch einen frischen Agenten haben die
+  Widersprüche zwischen `docs/architecture.md`, `docs/constitution.md`,
+  `docs/workflow.md` und dem Code aufgedeckt. Die vollständige, verbindliche
+  Aufzählung steht in In scope — hier keine zweite, die davon abweichen könnte.
+  Dazu zwei stillschweigende Abweichungen von der Constitution, die jetzt
+  offengelegt sind: der Pfad des Audit-Tests und der Versuch, den FS-Audit erst ab
+  Phase 4 laufen zu lassen. Der gefährlichste Einzelfund war der Kommentar in
+  `Cargo.toml`, der einem künftigen Backend-Autor sagt, die Workspace-Lints nicht zu
+  aktivieren — er hätte in Phase 8 oder 9 fünf Gates lautlos entfernt.
 - 2026-07-30: `audio-win` startet mit `#![forbid(unsafe_code)]`, obwohl die
   Constitution dem Backend die Ausnahme erlaubt — jeder geprüfte `wasapi`-Aufruf ist
-  eine safe Funktion. Die Ausnahme wird erst gezogen, wenn ein konkreter Fall sie
-  erzwingt.
+  eine safe Funktion, `sysinfo` ebenso, und die einzige `pub unsafe fn` der Crate
+  (`Device::from_raw`) braucht diese Phase nicht. Die Ausnahme wird erst gezogen,
+  wenn ein konkreter Fall sie erzwingt. Weil diese Entscheidung zwei bestehende
+  Artefakte falsch macht — die Zeile „das einzige Crate mit `unsafe`" in
+  `docs/architecture.md` und den Lint-Kommentar in `Cargo.toml` — trägt sie ihre
+  eigene Korrektur in der Liste in In scope; eine Entscheidung, die ein Dokument
+  hinter sich unwahr lässt, ist nicht fertig.
